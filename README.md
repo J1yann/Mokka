@@ -1,73 +1,68 @@
 # Mokka
 
-Mokka is a lightweight Discord music bot written in Go. It runs without
-Lavalink or an API key from the streaming platform. The Go process manages commands,
-voice, and the in-memory queue. The Strawcore helper searches YouTube and resolves
-media URLs when a track reaches the front of the queue. FFmpeg streams Opus to
-the bot for Discord voice. Lyrics come from LRCLIB. Long lyrics are sent as a
-text attachment.
+A lightweight Discord music bot written in Go. Runs without Lavalink or a
+streaming platform API key.
 
-| Prefix command | Slash command | Action |
+Join a voice channel and type `m!p One More Time` or use `/play` with a song
+title or YouTube link. The Now Playing card shows the track artwork and gives
+you buttons for the queue, lyrics, skip, and stop.
+
+## Commands
+
+| What you want to do | Prefix command | Slash command |
 | --- | --- | --- |
-| `m!p <title or link>`, `m!play <title or link>` | `/play query` | Queue a YouTube video or the first matching search result |
-| `m!queue` | `/queue` | Show the current track and upcoming tracks |
-| `!info`, `m!info` | `/info` | About Mokka |
-| `m!skip` | `/skip` | Skip the current track |
-| `m!stop` | `/stop` | Stop and clear the queue |
-| `m!lyrics [title and artist]` | `/lyrics [query]` | Look up lyrics for the current song or a supplied title |
-| `m!remove <position>` | `/remove position` | Remove a waiting track |
-| `m!move <from> <to>` | `/move from to` | Move a waiting track to another position |
-| `m!shuffle` | `/shuffle` | Randomize the waiting tracks |
-| `m!repeat [on or off]` | `/repeat [mode]` | Set repeat one, or toggle it without an argument |
+| Play or queue a song | `m!p <title or link>` or `m!play <title or link>` | `/play` |
+| See what's next | `m!queue` | `/queue` |
+| Read lyrics | `m!lyrics [title and artist]` | `/lyrics` |
+| Skip the current song | `m!skip` | `/skip` |
+| Stop and clear the queue | `m!stop` | `/stop` |
+| Edit the queue | `m!remove <position>`, `m!move <from> <to>` | `/remove`, `/move` |
+| Shuffle or repeat | `m!shuffle`, `m!repeat [on or off]` | `/shuffle`, `/repeat` |
+| About Mokka | `!info` or `m!info` | `/info` |
 
-The Now playing card shows the current track and its YouTube artwork. Its
-buttons open the queue or lyrics, skip the track, or stop playback and clear the
-queue. Button results share a separate response card in each channel. If the
-chat has moved on, the next click replaces the response card at the bottom.
-Moving the card uses Read Message History in that channel.
+## Self-host
 
-## Build and run
+1. **Create and invite your bot.** Enable **Message Content Intent** under
+   **Bot** for prefix commands. Use **Guild Install** with the `bot` and
+   `applications.commands` scopes. In the channels Mokka will use, grant
+   **View Channel**, **Send Messages**, **Read Message History**,
+   **Attach Files**, **Connect**, and **Speak**. [Discord Developer Portal](https://discord.com/developers/applications)
+2. **Build Mokka and its extractor.** You'll need Go 1.26, Cargo, and a C
+   compiler on the build machine. The runtime needs FFmpeg with libopus and
+   outbound access to HTTPS and Discord voice UDP.
 
-Build on a machine with Go 1.26, Cargo, and a C compiler. The VPS needs the
-two compiled binaries and FFmpeg with libopus support. Build for the VPS's OS
-and architecture.
+   ```sh
+   CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o mokka .
+   cargo build --locked --release --manifest-path extractor/Cargo.toml
+   ```
 
-```sh
-CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o mokka .
-cargo build --locked --release --manifest-path extractor/Cargo.toml
-```
+3. **Configure and start.** Copy the [example config](mokka.conf.example) and
+   add your bot token and Discord server ID. Mokka reads `mokka.conf` from its
+   working directory and registers slash commands in the configured server.
+   Keep `mokka.conf` private. Environment variables override file values.
 
-In the [Discord Developer Portal](https://discord.com/developers/applications),
-enable **Message Content Intent** under **Bot**. Under **Installation**, use
-Guild Install with the `bot` and `applications.commands` scopes. Give Mokka
-View Channel, Send Messages, Attach Files, Connect, and Speak in its intended
-channels. Use Discord's install link to add it to the server.
+   ```sh
+   install -m 600 mokka.conf.example mokka.conf
+   # Fill in DISCORD_TOKEN and MOKKA_GUILD_ID before starting.
+   ./mokka
+   ```
 
-Copy the config template, then set `DISCORD_TOKEN`, `MOKKA_GUILD_ID`, and
-`MOKKA_EXTRACTOR` in `mokka.conf`. Use plain `KEY=value` lines. The local
-config is ignored by Git. Mokka loads it from its working directory, and
-environment variables can override individual settings.
+| Optional setting | Default | What it controls |
+| --- | --- | --- |
+| `MOKKA_EXTRACTOR` | `mokka-extractor` on PATH | The example config points to the Cargo build output. Update the path if you move the helper. |
+| `MOKKA_IDLE_TIMEOUT` | `1h` | Leave voice when the queue is empty or the bot is alone for this long. Use a duration such as `15m`, or `0` to disable. |
+| `MOKKA_MEDIA_PROXY` | Direct connection | An optional HTTP proxy for YouTube search and audio downloads. |
 
-```sh
-install -m 600 mokka.conf.example mokka.conf
-# Edit mokka.conf before starting.
-./mokka
-```
+The queue holds 25 waiting tracks in memory and resets on restart. Mokka retries
+once if a track fails before it sends audio.
 
-Mokka registers its slash commands in that server at startup. It uses the
-Discord Gateway for commands and needs outbound HTTPS and Discord voice UDP.
-The queue holds 25 waiting tracks, and playback uses one FFmpeg process at a
-time. The queue resets on restart.
+## Under the hood
 
-The idle timeout defaults to one hour. Change `MOKKA_IDLE_TIMEOUT=1h` in
-`mokka.conf` to another duration, such as `90s` or `15m`. Mokka leaves voice
-when the queue stays empty or everyone else stays out of the voice channel for
-that long. Set it to `0` to disable automatic disconnection. Stop still
-disconnects immediately.
+Go handles Discord voice, commands, and the queue. Mokka uses these projects
+for search, audio, and lyrics.
 
-If a track fails before the first audio frame, Mokka retries once. Repeat one
-replays the current track when it finishes successfully.
+- **Strawcore** searches YouTube and resolves the audio URL. [Strawcore repository](https://git.sulkta.com/Sulkta-OSS/strawcore)
+- **FFmpeg** turns the stream into Opus for Discord voice. [FFmpeg](https://ffmpeg.org/)
+- **LRCLIB** looks up song lyrics. [LRCLIB](https://lrclib.net/)
 
-Set `MOKKA_MEDIA_PROXY` to an HTTP proxy URL to route YouTube search, stream
-resolution, and audio downloads through it. Discord and lyrics use their
-normal connections.
+Made with ❤️ by [J1yann](https://github.com/J1yann)
