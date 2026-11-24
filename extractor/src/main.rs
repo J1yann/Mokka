@@ -40,7 +40,12 @@ fn extract(command: &str, input: &str) -> Result<Value, Box<dyn Error>> {
                         .map(|stream| &stream.url)
                 })
                 .ok_or("No playable stream found")?;
-            Ok(json!({"url": stream, "title": info.name, "artist": info.uploader_name}))
+            Ok(json!({
+                "url": stream,
+                "title": info.name,
+                "artist": info.uploader_name,
+                "duration_seconds": info.duration_seconds
+            }))
         }
         _ => Err("Expected search or resolve".into()),
     }

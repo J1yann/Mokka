@@ -57,7 +57,8 @@ When the last song ends, Mokka shows a Playback finished card in the request cha
 
 Each server has its own queue of up to 25 waiting tracks. Queues are stored in
 memory and reset on restart. Up to three servers can play at once. Other servers
-wait for a playback slot. Mokka retries once if a track fails before it sends audio.
+wait for a playback slot. If playback is interrupted, Mokka tries once to
+resume from the last audio it sent.
 
 ## Under the hood
 

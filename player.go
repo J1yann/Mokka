@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -155,11 +156,17 @@ func (p *player) run() {
 		p.current, p.cancel = t, cancel
 		p.mu.Unlock()
 
+		var sent time.Duration
 		var err error
-		conn, err = p.playQueuedTrack(ctx, conn, channel, t)
+		conn, sent, err = p.playQueuedTrack(ctx, conn, channel, t)
 		if err != nil && ctx.Err() == nil {
 			slog.Warn("playback failed", "video", t.id, "error", err)
-			p.notify(t, card("Playback failed", "Couldn't play "+escapeCardText(label(t.Title))+". Try another track or queue it again.", ""))
+			title := escapeCardText(label(t.Title))
+			if sent > 0 {
+				p.showPlaybackInterrupted(t.textChannel, title)
+			} else {
+				p.notify(t, card("Playback failed", "Couldn't play "+title+". Try another track or queue it again.", ""))
+			}
 		}
 		p.mu.Lock()
 		finished := err == nil && ctx.Err() == nil && !p.leaving
@@ -176,7 +183,7 @@ func (p *player) run() {
 	}
 }
 
-func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track) (voice.Conn, error) {
+func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track) (voice.Conn, time.Duration, error) {
 	select {
 	case p.playbackSlots <- struct{}{}:
 	default:
@@ -186,7 +193,7 @@ func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel s
 		select {
 		case p.playbackSlots <- struct{}{}:
 		case <-ctx.Done():
-			return conn, ctx.Err()
+			return conn, 0, ctx.Err()
 		}
 		p.mu.Lock()
 		p.waiting = false
@@ -194,26 +201,32 @@ func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel s
 	}
 	defer func() { <-p.playbackSlots }()
 	if err := ctx.Err(); err != nil {
-		return conn, err
+		return conn, 0, err
 	}
+	var sent time.Duration
 	for attempt := 0; ; attempt++ {
-		next, started, err := p.playTrack(ctx, conn, channel, t)
+		next, played, err := p.playTrack(ctx, conn, channel, t, sent)
+		sent += played
 		if err == nil || ctx.Err() != nil {
-			return next, err
+			return next, sent, err
 		}
-		p.closeVoice(next)
-		conn = nil
-		if started || attempt == 1 {
-			return nil, err
+		conn = next
+		var voiceErr voiceWriteError
+		if errors.As(err, &voiceErr) {
+			p.closeVoice(conn)
+			conn = nil
 		}
-		slog.Info("retrying track startup", "video", t.id, "error", err)
+		if attempt == 1 {
+			return conn, sent, err
+		}
+		slog.Info("retrying playback", "video", t.id, "resume_at", sent, "error", err)
 	}
 }
 
-func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track) (voice.Conn, bool, error) {
+func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, start time.Duration) (voice.Conn, time.Duration, error) {
 	result, err := extract(ctx, p.extractor, p.mediaProxy, "resolve", t.id)
 	if err != nil {
-		return conn, false, fmt.Errorf("resolve audio: %w", err)
+		return conn, 0, fmt.Errorf("resolve audio: %w", err)
 	}
 	if conn == nil {
 		conn = p.client.VoiceManager.CreateConn(p.guild)
@@ -222,7 +235,7 @@ func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowfla
 		stop()
 		if err != nil {
 			p.closeVoice(conn)
-			return nil, false, fmt.Errorf("join voice: %w", err)
+			return nil, 0, fmt.Errorf("join voice: %w", err)
 		}
 	}
 	if result.Title != "" {
@@ -235,14 +248,14 @@ func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowfla
 	err = conn.SetSpeaking(speakCtx, voice.SpeakingFlagMicrophone)
 	stop()
 	if err != nil {
-		return conn, false, fmt.Errorf("start speaking: %w", err)
+		return conn, 0, voiceWriteError{fmt.Errorf("start speaking: %w", err)}
 	}
-	started := false
-	err = playAudio(ctx, conn, result.URL, p.mediaProxy, func() {
-		started = true
-		go p.notify(t, nowPlayingCard(t))
-	})
-	return conn, started, err
+	var onStart func()
+	if start == 0 {
+		onStart = func() { go p.notify(t, nowPlayingCard(t)) }
+	}
+	played, err := playAudio(ctx, conn, result.URL, p.mediaProxy, start, result.duration(), onStart)
+	return conn, played, err
 }
 
 func (p *player) waitIdle() {

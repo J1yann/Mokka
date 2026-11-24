@@ -93,7 +93,10 @@ func run() error {
 		bot.WithGatewayConfigOpts(gateway.WithIntents(
 			gateway.IntentGuilds, gateway.IntentGuildMessages, gateway.IntentMessageContent, gateway.IntentGuildVoiceStates)),
 		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagVoiceStates)),
-		bot.WithVoiceManagerConfigOpts(voice.WithDaveSessionCreateFunc(session.CreateFunc())),
+		bot.WithVoiceManagerConfigOpts(
+			voice.WithDaveSessionCreateFunc(session.CreateFunc()),
+			voice.WithConnCreateFunc(newManagedVoiceConn),
+		),
 		bot.WithEventListenerFunc(func(e *events.GuildJoin) {
 			if players[e.GuildID] != nil {
 				go registerGuildCommands(ctx, e.Client(), e.GuildID)

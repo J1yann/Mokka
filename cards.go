@@ -124,6 +124,15 @@ func (p *player) showPlaybackFinished(channel snowflake.ID) {
 	}
 }
 
+func (p *player) showPlaybackInterrupted(channel snowflake.ID, title string) {
+	p.responseMu.Lock()
+	defer p.responseMu.Unlock()
+	msg := card("Playback interrupted", "Couldn't resume "+title+". You can queue it again.", "")
+	if err := p.writeResponseCard(channel, p.responses[channel], msg, false); err != nil && p.ctx.Err() == nil {
+		slog.Warn("couldn't show playback interruption", "channel", channel, "error", err)
+	}
+}
+
 // writeResponseCard runs with responseMu held.
 func (p *player) writeResponseCard(channel snowflake.ID, entry responseCard, msg discord.MessageCreate, moveToBottom bool) error {
 	ctx, cancel := context.WithTimeout(p.ctx, 5*time.Second)

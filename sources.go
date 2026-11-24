@@ -5,18 +5,34 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type media struct {
-	URL    string
-	Title  string
-	Artist string
+	URL             string
+	Title           string
+	Artist          string
+	DurationSeconds float64 `json:"duration_seconds"`
+}
+
+func (m media) duration() time.Duration {
+	seconds := m.DurationSeconds
+	if u, err := url.Parse(m.URL); err == nil {
+		if fromURL, err := strconv.ParseFloat(u.Query().Get("dur"), 64); err == nil && fromURL > 0 && !math.IsInf(fromURL, 0) {
+			seconds = fromURL
+		}
+	}
+	if seconds <= 0 || math.IsNaN(seconds) || seconds >= float64(math.MaxInt64)/float64(time.Second) {
+		return 0
+	}
+	return time.Duration(seconds * float64(time.Second))
 }
 
 var videoID = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
