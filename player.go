@@ -24,16 +24,17 @@ type track struct {
 }
 
 type player struct {
-	ctx         context.Context
-	client      *bot.Client
-	guild       snowflake.ID
-	extractor   string
-	mediaProxy  string
-	searchSlot  chan struct{}
-	idleTimeout time.Duration
-	wake        chan struct{}
-	responseMu  sync.Mutex
-	responses   map[snowflake.ID]responseCard
+	ctx           context.Context
+	client        *bot.Client
+	guild         snowflake.ID
+	extractor     string
+	mediaProxy    string
+	searchSlot    chan struct{}
+	playbackSlots chan struct{}
+	idleTimeout   time.Duration
+	wake          chan struct{}
+	responseMu    sync.Mutex
+	responses     map[snowflake.ID]responseCard
 
 	mu         sync.Mutex
 	channel    snowflake.ID
@@ -43,6 +44,7 @@ type player struct {
 	running    bool
 	leaving    bool
 	repeat     bool
+	waiting    bool
 	generation uint64
 	done       chan struct{}
 }
@@ -154,30 +156,57 @@ func (p *player) run() {
 		p.mu.Unlock()
 
 		var err error
-		for attempt := 0; attempt < 2; attempt++ {
-			var started bool
-			conn, started, err = p.playTrack(ctx, conn, channel, t)
-			if err == nil || ctx.Err() != nil {
-				break
-			}
-			p.closeVoice(conn)
-			conn = nil
-			if started || attempt == 1 {
-				break
-			}
-			slog.Info("retrying track startup", "video", t.id, "error", err)
-		}
+		conn, err = p.playQueuedTrack(ctx, conn, channel, t)
 		if err != nil && ctx.Err() == nil {
 			slog.Warn("playback failed", "video", t.id, "error", err)
 			p.notify(t, card("Playback failed", "Couldn't play "+escapeCardText(label(t.Title))+". Try another track or queue it again.", ""))
 		}
 		p.mu.Lock()
-		if err == nil && ctx.Err() == nil && p.repeat && !p.leaving {
+		finished := err == nil && ctx.Err() == nil && !p.leaving
+		if finished && p.repeat {
 			p.queue = append([]track{t}, p.queue...)
 		}
+		queueFinished := finished && len(p.queue) == 0
 		cancel()
-		p.current, p.cancel = track{}, nil
+		p.current, p.cancel, p.waiting = track{}, nil, false
 		p.mu.Unlock()
+		if queueFinished {
+			p.showPlaybackFinished(t.textChannel)
+		}
+	}
+}
+
+func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track) (voice.Conn, error) {
+	select {
+	case p.playbackSlots <- struct{}{}:
+	default:
+		p.mu.Lock()
+		p.waiting = true
+		p.mu.Unlock()
+		select {
+		case p.playbackSlots <- struct{}{}:
+		case <-ctx.Done():
+			return conn, ctx.Err()
+		}
+		p.mu.Lock()
+		p.waiting = false
+		p.mu.Unlock()
+	}
+	defer func() { <-p.playbackSlots }()
+	if err := ctx.Err(); err != nil {
+		return conn, err
+	}
+	for attempt := 0; ; attempt++ {
+		next, started, err := p.playTrack(ctx, conn, channel, t)
+		if err == nil || ctx.Err() != nil {
+			return next, err
+		}
+		p.closeVoice(next)
+		conn = nil
+		if started || attempt == 1 {
+			return nil, err
+		}
+		slog.Info("retrying track startup", "video", t.id, "error", err)
 	}
 }
 
@@ -306,7 +335,11 @@ func (p *player) controls(command string, user snowflake.ID, cardID string) stri
 	if command == "queue" {
 		var lines []string
 		if p.current.id != "" {
-			lines = append(lines, "Now playing "+escapeCardText(label(p.current.Title)))
+			status := "Now playing "
+			if p.waiting {
+				status = "Waiting for a playback slot · "
+			}
+			lines = append(lines, status+escapeCardText(label(p.current.Title)))
 		}
 		for i, t := range p.queue {
 			if i == 10 {

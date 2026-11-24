@@ -40,9 +40,12 @@ func run() error {
 		return err
 	}
 	token := cfg.value("DISCORD_TOKEN")
-	guild, err := snowflake.Parse(cfg.value("MOKKA_GUILD_ID"))
-	if err != nil || guild == 0 || token == "" {
-		return errors.New("set DISCORD_TOKEN and MOKKA_GUILD_ID in mokka.conf or the environment")
+	if token == "" {
+		return errors.New("set DISCORD_TOKEN in mokka.conf or the environment")
+	}
+	guilds, err := configuredGuilds(cfg.value("MOKKA_GUILD_IDS"), cfg.value("MOKKA_GUILD_ID"))
+	if err != nil {
+		return err
 	}
 	extractor := cfg.value("MOKKA_EXTRACTOR")
 	if extractor == "" {
@@ -72,16 +75,33 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	p := &player{ctx: ctx, guild: guild, extractor: extractor, mediaProxy: mediaProxy, searchSlot: make(chan struct{}, 1),
-		responses: make(map[snowflake.ID]responseCard), idleTimeout: idleTimeout, wake: make(chan struct{}, 1)}
+	players := make(map[snowflake.ID]*player, len(guilds))
+	playbackSlots := make(chan struct{}, 3)
+	for _, guild := range guilds {
+		players[guild] = &player{ctx: ctx, guild: guild, extractor: extractor, mediaProxy: mediaProxy,
+			searchSlot: make(chan struct{}, 1), playbackSlots: playbackSlots, responses: make(map[snowflake.ID]responseCard),
+			idleTimeout: idleTimeout, wake: make(chan struct{}, 1)}
+	}
+	findPlayer := func(guild *snowflake.ID) *player {
+		if guild == nil {
+			return nil
+		}
+		return players[*guild]
+	}
 	slots := make(chan struct{}, 8)
 	client, err := disgo.New(token,
 		bot.WithGatewayConfigOpts(gateway.WithIntents(
 			gateway.IntentGuilds, gateway.IntentGuildMessages, gateway.IntentMessageContent, gateway.IntentGuildVoiceStates)),
 		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagVoiceStates)),
 		bot.WithVoiceManagerConfigOpts(voice.WithDaveSessionCreateFunc(session.CreateFunc())),
+		bot.WithEventListenerFunc(func(e *events.GuildJoin) {
+			if players[e.GuildID] != nil {
+				go registerGuildCommands(ctx, e.Client(), e.GuildID)
+			}
+		}),
 		bot.WithEventListenerFunc(func(e *events.MessageCreate) {
-			if e.GuildID == nil || *e.GuildID != guild || e.Message.Author.Bot {
+			p := findPlayer(e.GuildID)
+			if p == nil || e.Message.Author.Bot {
 				return
 			}
 			raw, ok := strings.CutPrefix(e.Message.Content, "m!")
@@ -113,7 +133,8 @@ func run() error {
 		}),
 		bot.WithEventListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
 			data, ok := e.Data.(discord.SlashCommandInteractionData)
-			if !ok || e.GuildID() == nil || *e.GuildID() != guild {
+			p := findPlayer(e.GuildID())
+			if !ok || p == nil {
 				return
 			}
 			select {
@@ -148,7 +169,8 @@ func run() error {
 		}),
 		bot.WithEventListenerFunc(func(e *events.ComponentInteractionCreate) {
 			data, ok := e.Data.(discord.ButtonInteractionData)
-			if !ok || e.GuildID() == nil || *e.GuildID() != guild {
+			p := findPlayer(e.GuildID())
+			if !ok || p == nil {
 				return
 			}
 			id, ok := strings.CutPrefix(data.CustomID(), "mokka:")
@@ -185,7 +207,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	p.client = client
+	for _, p := range players {
+		p.client = client
+	}
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -194,24 +218,42 @@ func run() error {
 
 	startCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if _, err := client.Rest.SetGuildCommands(client.ApplicationID, guild, slashCommands(), rest.WithCtx(startCtx)); err != nil {
-		return err
-	}
 	if err := client.OpenGateway(startCtx); err != nil {
 		return err
 	}
-	slog.Info("Mokka connected", "guild", guild)
+	slog.Info("Mokka connected", "allowed_servers", len(guilds))
+	go func() {
+		for _, guild := range guilds {
+			if ctx.Err() != nil {
+				return
+			}
+			registerGuildCommands(ctx, client, guild)
+		}
+	}()
 	<-ctx.Done()
-	p.mu.Lock()
-	done := p.done
-	p.mu.Unlock()
-	if done != nil {
-		select {
-		case <-done:
-		case <-time.After(6 * time.Second):
+	shutdown, cancelShutdown := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancelShutdown()
+	for _, p := range players {
+		p.mu.Lock()
+		done := p.done
+		p.mu.Unlock()
+		if done != nil {
+			select {
+			case <-done:
+			case <-shutdown.Done():
+				return nil
+			}
 		}
 	}
 	return nil
+}
+
+func registerGuildCommands(ctx context.Context, client *bot.Client, guild snowflake.ID) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, err := client.Rest.SetGuildCommands(client.ApplicationID, guild, slashCommands(), rest.WithCtx(ctx)); err != nil && ctx.Err() == nil {
+		slog.Warn("couldn't register slash commands", "guild", guild, "error", err)
+	}
 }
 
 func slashCommands() []discord.ApplicationCommandCreate {

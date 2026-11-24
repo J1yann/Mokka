@@ -105,6 +105,27 @@ func (p *player) showButtonResponse(channel, interaction snowflake.ID, msg disco
 		cancel()
 		moveToBottom = err == nil && len(latest) > 0 && latest[0].ID > entry.messageID
 	}
+	entry.interactionID = interaction
+	return p.writeResponseCard(channel, entry, msg, moveToBottom)
+}
+
+func (p *player) showPlaybackFinished(channel snowflake.ID) {
+	p.responseMu.Lock()
+	defer p.responseMu.Unlock()
+	p.mu.Lock()
+	idle := p.current.id == "" && len(p.queue) == 0 && !p.leaving && p.ctx.Err() == nil
+	p.mu.Unlock()
+	if !idle {
+		return
+	}
+	msg := card("Playback finished", "Nothing else is queued. Use `m!p <song title>` or `/play` to play another song.", "")
+	if err := p.writeResponseCard(channel, p.responses[channel], msg, false); err != nil && p.ctx.Err() == nil {
+		slog.Warn("couldn't show playback finished card", "channel", channel, "error", err)
+	}
+}
+
+// writeResponseCard runs with responseMu held.
+func (p *player) writeResponseCard(channel snowflake.ID, entry responseCard, msg discord.MessageCreate, moveToBottom bool) error {
 	ctx, cancel := context.WithTimeout(p.ctx, 5*time.Second)
 	defer cancel()
 	if entry.messageID != 0 && !moveToBottom {
@@ -121,7 +142,9 @@ func (p *player) showButtonResponse(channel, interaction snowflake.ID, msg disco
 	if err != nil {
 		return err
 	}
-	p.responses[channel] = responseCard{messageID: created.ID, interactionID: interaction}
+	entryCreated := entry
+	entryCreated.messageID = created.ID
+	p.responses[channel] = entryCreated
 	if moveToBottom {
 		if err := p.client.Rest.DeleteMessage(channel, entry.messageID, rest.WithCtx(ctx)); err != nil {
 			var apiErr *rest.Error

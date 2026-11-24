@@ -6,6 +6,7 @@ streaming platform API key.
 Join a voice channel and type `m!p One More Time` or use `/play` with a song
 title or YouTube link. The Now Playing card shows the track artwork and gives
 you buttons for the queue, lyrics, skip, and stop.
+When the last song ends, Mokka shows a Playback finished card in the request channel.
 
 ## Commands
 
@@ -49,12 +50,14 @@ you buttons for the queue, lyrics, skip, and stop.
 
 | Optional setting | Default | What it controls |
 | --- | --- | --- |
+| `MOKKA_GUILD_IDS` | `MOKKA_GUILD_ID` | A comma-separated list of Discord server IDs. Invite Mokka to each listed server. |
 | `MOKKA_EXTRACTOR` | `mokka-extractor` on PATH | The example config points to the Cargo build output. Update the path if you move the helper. |
 | `MOKKA_IDLE_TIMEOUT` | `1h` | Leave voice when the queue is empty or the bot is alone for this long. Use a duration such as `15m`, or `0` to disable. |
 | `MOKKA_MEDIA_PROXY` | Direct connection | An optional HTTP proxy for YouTube search and audio downloads. |
 
-The queue holds 25 waiting tracks in memory and resets on restart. Mokka retries
-once if a track fails before it sends audio.
+Each server has its own queue of up to 25 waiting tracks. Queues are stored in
+memory and reset on restart. Up to three servers can play at once. Other servers
+wait for a playback slot. Mokka retries once if a track fails before it sends audio.
 
 ## Under the hood
 
