@@ -7,6 +7,21 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
+func TestConfiguredOpusBitrate(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		want  int
+	}{
+		{"", 96}, {" 128 ", 128}, {"6", 6}, {"510", 510},
+		{"5", 0}, {"511", 0}, {"128k", 0},
+	} {
+		got, err := configuredOpusBitrate(tt.input)
+		if got != tt.want || (err != nil) != (tt.want == 0) {
+			t.Errorf("bitrate %q: got %d, %v; want %d", tt.input, got, err, tt.want)
+		}
+	}
+}
+
 func TestConfiguredGuilds(t *testing.T) {
 	for _, tt := range []struct {
 		name, plural, single string

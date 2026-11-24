@@ -53,6 +53,7 @@ When the last song ends, Mokka shows a Playback finished card in the request cha
 | `MOKKA_GUILD_IDS` | `MOKKA_GUILD_ID` | A comma-separated list of Discord server IDs. Invite Mokka to each listed server. |
 | `MOKKA_EXTRACTOR` | `mokka-extractor` on PATH | The example config points to the Cargo build output. Update the path if you move the helper. |
 | `MOKKA_IDLE_TIMEOUT` | `1h` | Leave voice when the queue is empty or the bot is alone for this long. Use a duration such as `15m`, or `0` to disable. |
+| `MOKKA_OPUS_BITRATE_KBPS` | `96` | Stereo Opus target bitrate in kbps. Use a whole number such as `128`. |
 | `MOKKA_MEDIA_PROXY` | Direct connection | An optional HTTP proxy for YouTube search and audio downloads. |
 
 Each server has its own queue of up to 25 waiting tracks. Queues are stored in

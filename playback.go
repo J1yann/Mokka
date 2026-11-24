@@ -119,7 +119,7 @@ func sendOpus(ctx context.Context, input io.Reader, output io.Writer) error {
 	}
 }
 
-func playAudio(ctx context.Context, conn voice.Conn, stream, proxy string, start, expected time.Duration, onStart func()) (time.Duration, error) {
+func playAudio(ctx context.Context, conn voice.Conn, stream, proxy string, start, expected time.Duration, bitrate int, onStart func()) (time.Duration, error) {
 	u, err := url.Parse(stream)
 	if err != nil || u.Scheme != "https" || !strings.HasSuffix(u.Hostname(), ".googlevideo.com") {
 		return 0, errors.New("unexpected stream URL")
@@ -140,7 +140,7 @@ func playAudio(ctx context.Context, conn voice.Conn, stream, proxy string, start
 	}
 	args = append(args,
 		"-i", stream, "-map", "0:a:0", "-vn", "-ac", "2", "-ar", "48000",
-		"-c:a", "libopus", "-threads", "1", "-frame_duration", "20", "-b:a", "96k",
+		"-c:a", "libopus", "-threads", "1", "-frame_duration", "20", "-b:a", strconv.Itoa(bitrate)+"k",
 		"-page_duration", "20000", "-f", "ogg", "pipe:1")
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	// FFmpeg errors can include the full signed media URL.

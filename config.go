@@ -5,12 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/disgoorg/snowflake/v2"
 )
 
 type config map[string]string
+
+func configuredOpusBitrate(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 96, nil
+	}
+	bitrate, err := strconv.Atoi(raw)
+	if err != nil || bitrate < 6 || bitrate > 510 {
+		return 0, errors.New("MOKKA_OPUS_BITRATE_KBPS must be a whole number from 6 to 510")
+	}
+	return bitrate, nil
+}
 
 func loadConfig(path string) (config, error) {
 	cfg := make(config)

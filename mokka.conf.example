@@ -5,5 +5,6 @@ MOKKA_GUILD_ID=
 MOKKA_GUILD_IDS=
 MOKKA_EXTRACTOR=./extractor/target/release/mokka-extractor
 MOKKA_IDLE_TIMEOUT=1h
+MOKKA_OPUS_BITRATE_KBPS=96
 # Optional HTTP proxy for YouTube search and audio.
 MOKKA_MEDIA_PROXY=

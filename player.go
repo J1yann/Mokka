@@ -33,6 +33,7 @@ type player struct {
 	searchSlot    chan struct{}
 	playbackSlots chan struct{}
 	idleTimeout   time.Duration
+	opusBitrate   int
 	wake          chan struct{}
 	responseMu    sync.Mutex
 	responses     map[snowflake.ID]responseCard
@@ -254,7 +255,7 @@ func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowfla
 	if start == 0 {
 		onStart = func() { go p.notify(t, nowPlayingCard(t)) }
 	}
-	played, err := playAudio(ctx, conn, result.URL, p.mediaProxy, start, result.duration(), onStart)
+	played, err := playAudio(ctx, conn, result.URL, p.mediaProxy, start, result.duration(), p.opusBitrate, onStart)
 	return conn, played, err
 }
 

@@ -58,6 +58,10 @@ func run() error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return errors.New("FFmpeg must be installed")
 	}
+	opusBitrate, err := configuredOpusBitrate(cfg.value("MOKKA_OPUS_BITRATE_KBPS"))
+	if err != nil {
+		return err
+	}
 	mediaProxy := cfg.value("MOKKA_MEDIA_PROXY")
 	if mediaProxy != "" {
 		u, err := url.Parse(mediaProxy)
@@ -80,7 +84,7 @@ func run() error {
 	for _, guild := range guilds {
 		players[guild] = &player{ctx: ctx, guild: guild, extractor: extractor, mediaProxy: mediaProxy,
 			searchSlot: make(chan struct{}, 1), playbackSlots: playbackSlots, responses: make(map[snowflake.ID]responseCard),
-			idleTimeout: idleTimeout, wake: make(chan struct{}, 1)}
+			idleTimeout: idleTimeout, opusBitrate: opusBitrate, wake: make(chan struct{}, 1)}
 	}
 	findPlayer := func(guild *snowflake.ID) *player {
 		if guild == nil {
