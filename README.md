@@ -1,6 +1,7 @@
 # Mokka
 
-Mokka is a single-server Discord music bot. The Go process manages commands,
+Mokka is a lightweight Discord music bot written in Go. It runs without
+Lavalink or an API key from the streaming platform. The Go process manages commands,
 voice, and the in-memory queue. The Strawcore helper searches YouTube and resolves
 media URLs when a track reaches the front of the queue. FFmpeg streams Opus to
 the bot for Discord voice. Lyrics come from LRCLIB. Long lyrics are sent as a
@@ -10,6 +11,7 @@ text attachment.
 | --- | --- | --- |
 | `m!p <title or link>`, `m!play <title or link>` | `/play query` | Queue a YouTube video or the first matching search result |
 | `m!queue` | `/queue` | Show the current track and upcoming tracks |
+| `!info`, `m!info` | `/info` | About Mokka |
 | `m!skip` | `/skip` | Skip the current track |
 | `m!stop` | `/stop` | Stop and clear the queue |
 | `m!lyrics [title and artist]` | `/lyrics [query]` | Look up lyrics for the current song or a supplied title |

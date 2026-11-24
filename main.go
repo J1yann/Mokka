@@ -86,14 +86,17 @@ func run() error {
 			}
 			raw, ok := strings.CutPrefix(e.Message.Content, "m!")
 			if !ok {
-				return
+				if strings.TrimSpace(e.Message.Content) != "!info" {
+					return
+				}
+				raw = "info"
 			}
 			name, query, _ := strings.Cut(strings.Join(strings.Fields(raw), " "), " ")
 			if name == "p" {
 				name = "play"
 			}
 			switch name {
-			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat":
+			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "info":
 			default:
 				return
 			}
@@ -220,6 +223,7 @@ func slashCommands() []discord.ApplicationCommandCreate {
 			Options: []discord.ApplicationCommandOption{
 				discord.ApplicationCommandOptionString{Name: "query", Description: "Song title and optional artist"}}},
 		discord.SlashCommandCreate{Name: "queue", Description: "Show the music queue"},
+		discord.SlashCommandCreate{Name: "info", Description: "About Mokka"},
 		discord.SlashCommandCreate{Name: "skip", Description: "Skip the current track"},
 		discord.SlashCommandCreate{Name: "stop", Description: "Stop playback and clear the queue"},
 		discord.SlashCommandCreate{Name: "remove", Description: "Remove a waiting track", Options: []discord.ApplicationCommandOption{
@@ -238,6 +242,8 @@ func slashCommands() []discord.ApplicationCommandCreate {
 
 func (p *player) command(name, query string, user, channel snowflake.ID) (string, string) {
 	switch name {
+	case "info":
+		return "A lightweight Discord music bot with queue controls and lyrics.\n\nPlay a song with `m!p <title>` or `/play`.\n\nMade with ❤️ by [J1yann](https://github.com/J1yann)", ""
 	case "play":
 		return p.enqueue(user, channel, query), ""
 	case "lyrics":

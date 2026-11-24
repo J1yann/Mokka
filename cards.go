@@ -41,6 +41,8 @@ func card(title, message, lyrics string) discord.MessageCreate {
 func commandCard(name, message, lyrics string) discord.MessageCreate {
 	title := "Playback"
 	switch name {
+	case "info":
+		title = "About Mokka"
 	case "queue":
 		title = "Queue"
 	case "lyrics":
