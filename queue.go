@@ -1,0 +1,84 @@
+package main
+
+import (
+	"fmt"
+	"math/rand/v2"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/disgoorg/snowflake/v2"
+)
+
+func (p *player) editQueue(name, input string, user snowflake.ID) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.channel == 0 || p.leaving {
+		return "Mokka isn't playing or waiting in voice."
+	}
+	state, ok := p.client.Caches.VoiceState(p.guild, user)
+	if !ok || state.ChannelID == nil || *state.ChannelID != p.channel {
+		return "Join Mokka's voice channel first."
+	}
+	args := strings.Fields(input)
+	switch name {
+	case "remove", "move":
+		return p.reorderQueue(name, args)
+	case "shuffle":
+		if len(p.queue) < 2 {
+			return "Add at least two tracks to the queue before shuffling."
+		}
+		rand.Shuffle(len(p.queue), func(i, j int) { p.queue[i], p.queue[j] = p.queue[j], p.queue[i] })
+		return fmt.Sprintf("Shuffled %d queued tracks.", len(p.queue))
+	case "repeat":
+		switch strings.ToLower(strings.TrimSpace(input)) {
+		case "":
+			p.repeat = !p.repeat
+		case "on":
+			p.repeat = true
+		case "off":
+			p.repeat = false
+		default:
+			return "Use `m!repeat on` or `m!repeat off`."
+		}
+		if p.repeat {
+			return "Repeat one is on."
+		}
+		return "Repeat one is off."
+	default:
+		return "Unknown queue command."
+	}
+}
+
+// reorderQueue runs with p.mu held. Positions refer to waiting tracks only.
+func (p *player) reorderQueue(name string, args []string) string {
+	want := 1
+	usage := "Use `m!remove <position>`."
+	if name == "move" {
+		want = 2
+		usage = "Use `m!move <from> <to>`."
+	}
+	if len(args) != want {
+		return usage
+	}
+	if len(p.queue) == 0 {
+		return "The queue is empty."
+	}
+	var positions [2]int
+	for i, arg := range args {
+		position, err := strconv.Atoi(arg)
+		if err != nil || position < 1 || position > len(p.queue) {
+			return fmt.Sprintf("Use a queue position from 1 to %d.", len(p.queue))
+		}
+		positions[i] = position - 1
+	}
+	from, to := positions[0], positions[1]
+	t := p.queue[from]
+	title := escapeCardText(label(t.Title))
+	p.queue = slices.Delete(p.queue, from, from+1)
+	if name == "remove" {
+		return "Removed " + title + " from the queue."
+	}
+	p.queue = slices.Insert(p.queue, to, t)
+	return fmt.Sprintf("Moved %s to position %d.", title, to+1)
+}

@@ -1,0 +1,7 @@
+# Copy to mokka.conf and fill in the bot token and server ID.
+DISCORD_TOKEN=
+MOKKA_GUILD_ID=
+MOKKA_EXTRACTOR=./extractor/target/release/mokka-extractor
+MOKKA_IDLE_TIMEOUT=1h
+# Optional HTTP proxy for YouTube search and audio.
+MOKKA_MEDIA_PROXY=

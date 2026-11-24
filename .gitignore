@@ -1,0 +1,4 @@
+/mokka
+/extractor/target/
+.env
+/mokka.conf
