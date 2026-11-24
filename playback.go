@@ -114,7 +114,13 @@ func sendOpus(ctx context.Context, input io.Reader, output io.Writer) error {
 			if _, err := output.Write(frame); err != nil {
 				return err
 			}
-			next = time.Now().Add(opusFrameDuration)
+			now := time.Now()
+			// Keep the send clock anchored to the frame cadence. Rebase after
+			// a full missed frame so a stall cannot trigger a burst of packets.
+			if next.IsZero() || now.Sub(next) >= opusFrameDuration {
+				next = now
+			}
+			next = next.Add(opusFrameDuration)
 		}
 	}
 }
