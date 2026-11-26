@@ -122,11 +122,11 @@ func (p *player) showPlaybackFinished(channel snowflake.ID, noRecommendation boo
 	if !idle {
 		return
 	}
-	message := "Nothing else is queued. Use `m!p <song title>` or `/play` to play another song."
+	message := "Nothing else is queued."
 	if noRecommendation {
-		message = "Couldn’t find another track. Use `m!p <song title>` or `/play` to play another song."
+		message = "Couldn’t find another track."
 	}
-	msg := card("Playback finished", message, "")
+	msg := card("Playback finished", message+" Use `"+p.prefix+"p <song title>` or `/play` to play another song.", "")
 	if err := p.writeResponseCard(channel, p.responses[channel], msg, false); err != nil && p.ctx.Err() == nil {
 		slog.Warn("couldn't show playback finished card", "channel", channel, "error", err)
 	}

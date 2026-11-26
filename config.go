@@ -13,6 +13,21 @@ import (
 
 type config map[string]string
 
+const defaultPrefix = "m!"
+
+func configuredPrefix(raw string) (string, error) {
+	prefix := strings.TrimSpace(raw)
+	if prefix == "" {
+		return defaultPrefix, nil
+	}
+	if len(prefix) > 12 || strings.HasPrefix(prefix, "/") || strings.IndexFunc(prefix, func(r rune) bool {
+		return r < '!' || r > '~' || r == '`'
+	}) >= 0 {
+		return "", errors.New("MOKKA_PREFIX must be 1 to 12 printable ASCII characters with no spaces or backticks and cannot start with /")
+	}
+	return prefix, nil
+}
+
 func configuredOpusBitrate(raw string) (int, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

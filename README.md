@@ -80,6 +80,7 @@ Environment variables override `mokka.conf`.
 
 | Optional setting | Default | What it controls |
 | --- | --- | --- |
+| `MOKKA_PREFIX` | `m!` | Text command prefix. Set it to `.` for `.play` or `!` for `!play`, then restart Mokka. |
 | `MOKKA_GUILD_IDS` | `MOKKA_GUILD_ID` | A comma-separated list of Discord server IDs. Invite Mokka to each listed server. |
 | `MOKKA_STATE_DIR` | `mokka-state` | Writable directory for per-server autoplay and volume settings. |
 | `MOKKA_EXTRACTOR` | `mokka-extractor` on PATH | The example config points to the bundled extractor or the Cargo build output. Update the path if you move the helper. |

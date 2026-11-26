@@ -10,3 +10,5 @@ MOKKA_OPUS_BITRATE_KBPS=96
 MOKKA_MEDIA_PROXY=
 # Optional writable directory for saved playback preferences.
 MOKKA_STATE_DIR=mokka-state
+# Prefix for text commands. Restart Mokka after changing it.
+MOKKA_PREFIX=m!

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
@@ -81,6 +82,11 @@ func run() error {
 		}
 	}
 
+	prefix, err := configuredPrefix(cfg.value("MOKKA_PREFIX"))
+	if err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	stateDir := cfg.value("MOKKA_STATE_DIR")
@@ -96,7 +102,7 @@ func run() error {
 			slog.Warn("couldn't load preferences; saving disabled for this server", "guild", guild, "error", err)
 			path = ""
 		}
-		players[guild] = &player{ctx: ctx, guild: guild, extractor: extractor, mediaProxy: mediaProxy,
+		players[guild] = &player{ctx: ctx, guild: guild, prefix: prefix, extractor: extractor, mediaProxy: mediaProxy,
 			searchSlot: make(chan struct{}, 1), playbackSlots: playbackSlots, responses: make(map[snowflake.ID]responseCard),
 			preferencesPath: path, autoplay: settings.Autoplay, volume: settings.Volume, idleTimeout: idleTimeout, opusBitrate: opusBitrate, wake: make(chan struct{}, 1)}
 	}
@@ -125,19 +131,7 @@ func run() error {
 			if p == nil || e.Message.Author.Bot {
 				return
 			}
-			raw, ok := strings.CutPrefix(e.Message.Content, "m!")
-			if !ok {
-				if strings.TrimSpace(e.Message.Content) != "!info" {
-					return
-				}
-				raw = "info"
-			}
-			name, query, _ := strings.Cut(strings.Join(strings.Fields(raw), " "), " ")
-			if name == "p" {
-				name = "play"
-			} else if name == "v" {
-				name = "volume"
-			}
+			name, query := parsePrefixCommand(e.Message.Content, p.prefix)
 			switch name {
 			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "autoplay", "volume", "detail", "info":
 			default:
@@ -317,6 +311,24 @@ func slashCommands() []discord.ApplicationCommandCreate {
 	}
 }
 
+func parsePrefixCommand(content, prefix string) (string, string) {
+	if strings.TrimSpace(content) == "!info" {
+		return "info", ""
+	}
+	raw, ok := strings.CutPrefix(content, prefix)
+	if !ok {
+		return "", ""
+	}
+	name, query, _ := strings.Cut(strings.Join(strings.Fields(raw), " "), " ")
+	switch name {
+	case "p":
+		name = "play"
+	case "v":
+		name = "volume"
+	}
+	return name, query
+}
+
 func (p *player) command(name, query string, user, channel snowflake.ID) (string, string) {
 	if !p.inVoice(user) {
 		return joinVoiceMessage, ""
@@ -331,7 +343,7 @@ func (p *player) command(name, query string, user, channel snowflake.ID) (string
 				lines = append(lines, "`/"+slash.Name+"` "+slash.Description)
 			}
 		}
-		lines = append(lines, "", "You can also use music commands with `m!`. Use `m!p` for `m!play` and `m!v` for `m!volume`.")
+		lines = append(lines, "", fmt.Sprintf("Use `%[1]sp` for `%[1]splay` and `%[1]sv` for `%[1]svolume`.", p.prefix))
 		return strings.Join(lines, "\n"), ""
 	case "detail":
 		return p.playbackDetails(), ""

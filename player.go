@@ -36,6 +36,7 @@ type player struct {
 	ctx             context.Context
 	client          *bot.Client
 	guild           snowflake.ID
+	prefix          string
 	extractor       string
 	preferencesPath string
 	mediaProxy      string
@@ -703,7 +704,7 @@ func (p *player) lookupLyrics(query, cardID string) (string, string) {
 	case err != nil:
 		return "The lyrics service didn't respond. Try again shortly.", ""
 	case result.Text == "":
-		return "No lyrics found. Try `m!lyrics <song title> <artist>`.", ""
+		return "No lyrics found. Try `" + p.prefix + "lyrics <song title> <artist>`.", ""
 	default:
 		return "Lyrics for " + escapeCardText(label(result.Artist+" · "+result.Title)), result.Text
 	}

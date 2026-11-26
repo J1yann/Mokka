@@ -71,7 +71,7 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 		case "off":
 			next = false
 		default:
-			return "Use `m!" + name + " on` or `m!" + name + " off`."
+			return "Use `" + p.prefix + name + " on` or `" + p.prefix + name + " off`."
 		}
 		if name == "autoplay" && next != p.autoplay && !p.savePreferenceChange(preferences{Autoplay: next, Volume: p.volume}) {
 			return preferenceSaveMessage
@@ -89,10 +89,10 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 // reorderQueue runs with p.mu held. Positions refer to waiting tracks only.
 func (p *player) reorderQueue(name string, args []string) string {
 	want := 1
-	usage := "Use `m!remove <position>`."
+	usage := "Use `" + p.prefix + "remove <position>`."
 	if name == "move" {
 		want = 2
-		usage = "Use `m!move <from> <to>`."
+		usage = "Use `" + p.prefix + "move <from> <to>`."
 	}
 	if len(args) != want {
 		return usage
