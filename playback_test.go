@@ -3,8 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
 	"net"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,5 +107,57 @@ func TestFFmpegDiagnosticsOmitMediaURL(t *testing.T) {
 	_, _ = diagnostics.Write([]byte("https://example.invalid/?sig=secret: Stream ends prematurely"))
 	if category := diagnostics.category(); category != "FFmpeg input ended early" {
 		t.Fatalf("unexpected diagnostic category: %q", category)
+	}
+}
+
+func TestLivePlaybackVolume(t *testing.T) {
+	output, err := exec.Command("ffmpeg", "-hide_banner", "-h", "filter=azmq").Output()
+	if err != nil || !strings.HasPrefix(string(output), "Filter azmq") {
+		t.Skip("FFmpeg with azmq is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	socketPath := t.TempDir() + "/volume.sock"
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-re", "-f", "lavfi",
+		"-i", "sine=sample_rate=48000", "-t", "1.5", "-af", volumeFilter(socketPath, 30), "-f", "s16le", "pipe:1")
+	var diagnostics bytes.Buffer
+	cmd.Stderr = &diagnostics
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { cancel(); _ = cmd.Wait() }()
+	before := make([]byte, 4800*2)
+	if _, err := io.ReadFull(pipe, before); err != nil {
+		t.Fatal(err)
+	}
+	change := make(chan error, 1)
+	go func() { change <- setPlaybackVolume(ctx, socketPath, 70, nil) }()
+	rest, err := io.ReadAll(pipe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-change; err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("FFmpeg: %v: %s", err, diagnostics.String())
+	}
+	if len(before)+len(rest) != 72000*2 {
+		t.Fatalf("expected 72000 consecutive samples, got %d", (len(before)+len(rest))/2)
+	}
+	peak := func(audio []byte) int {
+		var value int
+		for len(audio) >= 2 {
+			value = max(value, int(int16(binary.LittleEndian.Uint16(audio))))
+			audio = audio[2:]
+		}
+		return value
+	}
+	if low, high := peak(before), peak(rest[len(rest)-len(before):]); low < 1200 || low > 1250 || high < 2800 || high > 2900 {
+		t.Fatalf("unexpected peak levels before and after change: %d, %d", low, high)
 	}
 }

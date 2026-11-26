@@ -22,7 +22,11 @@ When the last song ends, Mokka shows a Playback finished card in the request cha
 | Edit the queue | `m!remove <position>`, `m!move <from> <to>` | `/remove`, `/move` |
 | Shuffle or repeat | `m!shuffle`, `m!repeat [on or off]` | `/shuffle`, `/repeat` |
 | Autoplay when the queue ends | `m!autoplay [on or off]` | `/autoplay` |
+| Show or set volume (0–100%) | `m!v [level]` or `m!volume [level]` | `/volume [level]` |
 | About Mokka | `!info` or `m!info` | `/info` |
+
+For example, `m!v 70` or `/volume level:70` changes the volume during playback.
+Omit the level to show the current setting.
 
 ## Self-host
 
@@ -32,8 +36,8 @@ When the last song ends, Mokka shows a Playback finished card in the request cha
    **View Channel**, **Send Messages**, **Read Message History**,
    **Attach Files**, **Connect**, and **Speak**. [Discord Developer Portal](https://discord.com/developers/applications)
 2. **Build Mokka and its extractor.** You'll need Go 1.26, Cargo, and a C
-   compiler on the build machine. The runtime needs FFmpeg with libopus and
-   outbound access to HTTPS and Discord voice UDP.
+   compiler on the build machine. The runtime needs FFmpeg with libopus and the
+   `azmq` filter (libzmq), plus outbound access to HTTPS and Discord voice UDP.
 
    ```sh
    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o mokka .

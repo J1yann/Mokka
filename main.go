@@ -58,6 +58,9 @@ func run() error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return errors.New("FFmpeg must be installed")
 	}
+	if output, err := exec.Command("ffmpeg", "-hide_banner", "-h", "filter=azmq").Output(); err != nil || !strings.HasPrefix(string(output), "Filter azmq") {
+		return errors.New("FFmpeg must include the azmq filter (libzmq)")
+	}
 	opusBitrate, err := configuredOpusBitrate(cfg.value("MOKKA_OPUS_BITRATE_KBPS"))
 	if err != nil {
 		return err
@@ -84,7 +87,7 @@ func run() error {
 	for _, guild := range guilds {
 		players[guild] = &player{ctx: ctx, guild: guild, extractor: extractor, mediaProxy: mediaProxy,
 			searchSlot: make(chan struct{}, 1), playbackSlots: playbackSlots, responses: make(map[snowflake.ID]responseCard),
-			idleTimeout: idleTimeout, opusBitrate: opusBitrate, wake: make(chan struct{}, 1)}
+			volume: 100, idleTimeout: idleTimeout, opusBitrate: opusBitrate, wake: make(chan struct{}, 1)}
 	}
 	findPlayer := func(guild *snowflake.ID) *player {
 		if guild == nil {
@@ -121,9 +124,11 @@ func run() error {
 			name, query, _ := strings.Cut(strings.Join(strings.Fields(raw), " "), " ")
 			if name == "p" {
 				name = "play"
+			} else if name == "v" {
+				name = "volume"
 			}
 			switch name {
-			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "autoplay", "info":
+			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "autoplay", "volume", "info":
 			default:
 				return
 			}
@@ -158,6 +163,10 @@ func run() error {
 						query = strconv.Itoa(data.Int("position"))
 					case "move":
 						query = strconv.Itoa(data.Int("from")) + " " + strconv.Itoa(data.Int("to"))
+					case "volume":
+						if level, ok := data.OptInt("level"); ok {
+							query = strconv.Itoa(level)
+						}
 					case "repeat", "autoplay":
 						query, _ = data.OptString("mode")
 					}
@@ -282,6 +291,9 @@ func slashCommands() []discord.ApplicationCommandCreate {
 			discord.ApplicationCommandOptionInt{Name: "from", Description: "Current position", Required: true},
 			discord.ApplicationCommandOptionInt{Name: "to", Description: "New position", Required: true},
 		}},
+		discord.SlashCommandCreate{Name: "volume", Description: "Show or set playback volume", Options: []discord.ApplicationCommandOption{
+			discord.ApplicationCommandOptionInt{Name: "level", Description: "Volume from 0 to 100 percent"},
+		}},
 		discord.SlashCommandCreate{Name: "shuffle", Description: "Shuffle the waiting tracks"},
 		discord.SlashCommandCreate{Name: "repeat", Description: "Set repeat one or toggle it", Options: []discord.ApplicationCommandOption{
 			discord.ApplicationCommandOptionString{Name: "mode", Description: "On or off"},
@@ -302,7 +314,7 @@ func (p *player) command(name, query string, user, channel snowflake.ID) (string
 		return p.lookupLyrics(query, "")
 	case "queue", "skip", "stop":
 		return p.controls(name, user, ""), ""
-	case "remove", "move", "shuffle", "repeat", "autoplay":
+	case "remove", "move", "shuffle", "repeat", "autoplay", "volume":
 		return p.editQueue(name, query, user), ""
 	default:
 		return "Unknown command.", ""

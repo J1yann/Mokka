@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/disgoorg/disgo/voice"
+	"github.com/go-zeromq/zmq4"
 )
 
 const opusFrameDuration = 20 * time.Millisecond
@@ -125,7 +128,7 @@ func sendOpus(ctx context.Context, input io.Reader, output io.Writer) error {
 	}
 }
 
-func playAudio(ctx context.Context, conn voice.Conn, stream, proxy string, start, expected time.Duration, bitrate int, onStart func()) (time.Duration, error) {
+func playAudio(ctx context.Context, conn voice.Conn, stream, proxy string, start, expected time.Duration, bitrate, volume int, updates <-chan int, onStart func()) (time.Duration, error) {
 	u, err := url.Parse(stream)
 	if err != nil || u.Scheme != "https" || !strings.HasSuffix(u.Hostname(), ".googlevideo.com") {
 		return 0, errors.New("unexpected stream URL")
@@ -144,8 +147,16 @@ func playAudio(ctx context.Context, conn voice.Conn, stream, proxy string, start
 	if start > 0 {
 		args = append(args, "-ss", strconv.FormatFloat(start.Seconds(), 'f', 3, 64))
 	}
+	args = append(args, "-i", stream, "-map", "0:a:0", "-vn", "-ac", "2", "-ar", "48000")
+	// A private directory keeps filter commands local to Mokka's user.
+	dir, err := os.MkdirTemp("/tmp", "mokka-volume-")
+	if err != nil {
+		return 0, err
+	}
+	defer os.RemoveAll(dir)
+	socketPath := dir + "/control.sock"
+	args = append(args, "-af", volumeFilter(socketPath, volume))
 	args = append(args,
-		"-i", stream, "-map", "0:a:0", "-vn", "-ac", "2", "-ar", "48000",
 		"-c:a", "libopus", "-threads", "1", "-frame_duration", "20", "-b:a", strconv.Itoa(bitrate)+"k",
 		"-page_duration", "20000", "-f", "ogg", "pipe:1")
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
@@ -159,6 +170,15 @@ func playAudio(ctx context.Context, conn voice.Conn, stream, proxy string, start
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
+	volumeDone := make(chan struct{})
+	go func() {
+		defer close(volumeDone)
+		updatePlaybackVolume(ctx, socketPath, updates)
+	}()
+	defer func() {
+		cancel()
+		<-volumeDone
+	}()
 	writer := &daveWriter{ctx: ctx, conn: conn, onStart: onStart}
 	err = sendOpus(ctx, pipe, writer)
 	if err != nil {
@@ -179,6 +199,49 @@ func playAudio(ctx context.Context, conn voice.Conn, stream, proxy string, start
 		return writer.sent, fmt.Errorf("FFmpeg: %w", waitErr)
 	}
 	return writer.sent, checkAudioDuration(start+writer.sent, expected)
+}
+
+func volumeFilter(socketPath string, volume int) string {
+	return "azmq=b='ipc\\://" + socketPath + "',volume@music=" + strconv.Itoa(volume) + "/100"
+}
+
+func updatePlaybackVolume(ctx context.Context, socketPath string, updates <-chan int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case level := <-updates:
+			if err := setPlaybackVolume(ctx, socketPath, level, updates); err != nil && ctx.Err() == nil {
+				slog.Warn("could not update playback volume", "error", err)
+			}
+		}
+	}
+}
+
+func setPlaybackVolume(ctx context.Context, socketPath string, level int, updates <-chan int) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	socket := zmq4.NewReq(ctx, zmq4.WithDialerRetry(50*time.Millisecond), zmq4.WithDialerMaxRetries(-1))
+	defer socket.Close()
+	if err := socket.Dial("ipc://" + socketPath); err != nil {
+		return err
+	}
+	select {
+	case level = <-updates:
+	default:
+	}
+	command := fmt.Sprintf("volume@music volume %d/100", level)
+	if err := socket.Send(zmq4.NewMsgString(command)); err != nil {
+		return err
+	}
+	reply, err := socket.Recv()
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(string(reply.Bytes()), "0 ") {
+		return fmt.Errorf("FFmpeg volume command rejected: %s", reply.Bytes())
+	}
+	return nil
 }
 
 func checkAudioDuration(sent, expected time.Duration) error {

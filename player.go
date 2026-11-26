@@ -38,18 +38,20 @@ type player struct {
 	responseMu    sync.Mutex
 	responses     map[snowflake.ID]responseCard
 
-	mu         sync.Mutex
-	channel    snowflake.ID
-	queue      []track
-	current    track
-	cancel     context.CancelFunc
-	running    bool
-	leaving    bool
-	repeat     bool
-	autoplay   bool
-	waiting    bool
-	generation uint64
-	done       chan struct{}
+	mu            sync.Mutex
+	channel       snowflake.ID
+	queue         []track
+	current       track
+	cancel        context.CancelFunc
+	volumeUpdates chan int
+	volume        int
+	running       bool
+	leaving       bool
+	repeat        bool
+	autoplay      bool
+	waiting       bool
+	generation    uint64
+	done          chan struct{}
 }
 
 func (p *player) enqueue(user, textChannel snowflake.ID, query string) string {
@@ -223,7 +225,7 @@ func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel s
 		return conn, 0, err
 	}
 	var sent time.Duration
-	for attempt := 0; ; attempt++ {
+	for attempt := 0; ; {
 		next, played, err := p.playTrack(ctx, conn, channel, t, sent)
 		sent += played
 		if err == nil || ctx.Err() != nil {
@@ -238,6 +240,7 @@ func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel s
 		if attempt == 1 {
 			return conn, sent, err
 		}
+		attempt++
 		slog.Info("retrying playback", "video", t.id, "resume_at", sent, "error", err)
 	}
 }
@@ -273,7 +276,15 @@ func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowfla
 	if start == 0 {
 		onStart = func() { go p.notify(t, nowPlayingCard(t)) }
 	}
-	played, err := playAudio(ctx, conn, result.URL, p.mediaProxy, start, result.duration(), p.opusBitrate, onStart)
+	updates := make(chan int, 1)
+	p.mu.Lock()
+	volume := p.volume
+	p.volumeUpdates = updates
+	p.mu.Unlock()
+	played, err := playAudio(ctx, conn, result.URL, p.mediaProxy, start, result.duration(), p.opusBitrate, volume, updates, onStart)
+	p.mu.Lock()
+	p.volumeUpdates = nil
+	p.mu.Unlock()
 	return conn, played, err
 }
 

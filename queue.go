@@ -20,6 +20,25 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 	if !ok || state.ChannelID == nil || *state.ChannelID != p.channel {
 		return "Join Mokka's voice channel first."
 	}
+	if name == "volume" {
+		if input != "" {
+			level, err := strconv.Atoi(input)
+			if err != nil || level < 0 || level > 100 {
+				return "Use a volume from 0 to 100."
+			}
+			if p.volume != level {
+				p.volume = level
+				if updates := p.volumeUpdates; updates != nil {
+					select {
+					case <-updates:
+					default:
+					}
+					updates <- level
+				}
+			}
+		}
+		return fmt.Sprintf("Volume is %d%%.", p.volume)
+	}
 	args := strings.Fields(input)
 	switch name {
 	case "remove", "move":
