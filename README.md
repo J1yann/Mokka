@@ -1,5 +1,7 @@
 # Mokka
 
+<img src="assets/logo.svg" alt="Mokka bean record logo" width="96" height="96" />
+
 A lightweight Discord music bot written in Go. Runs without Lavalink or a
 streaming platform API key.
 
