@@ -16,14 +16,15 @@ import (
 )
 
 const youtubeWebVersion = "2.20260120.01.00"
+const autoplayBatchSize = 5
 
-func (p *player) nextTrack(ctx context.Context, current track, recent []string) (track, error) {
+func (p *player) nextTracks(ctx context.Context, current track, recent []string) ([]track, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	body := fmt.Sprintf(`{"context":{"client":{"clientName":"WEB","clientVersion":%q,"hl":"en","gl":"US"}},"videoId":%q}`, youtubeWebVersion, current.id)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://www.youtube.com/youtubei/v1/next?prettyPrint=false", strings.NewReader(body))
 	if err != nil {
-		return track{}, err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-YouTube-Client-Name", "1")
@@ -34,7 +35,7 @@ func (p *player) nextTrack(ctx context.Context, current track, recent []string) 
 	if p.mediaProxy != "" {
 		proxy, err := url.Parse(p.mediaProxy)
 		if err != nil {
-			return track{}, err
+			return nil, err
 		}
 		transport := &http.Transport{Proxy: http.ProxyURL(proxy)}
 		defer transport.CloseIdleConnections()
@@ -42,13 +43,13 @@ func (p *player) nextTrack(ctx context.Context, current track, recent []string) 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return track{}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return track{}, fmt.Errorf("YouTube Up Next returned HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("YouTube Up Next returned HTTP %d", resp.StatusCode)
 	}
-	return parseNextTrack(io.LimitReader(resp.Body, 4<<20), current.textChannel, recent)
+	return parseNextTracks(io.LimitReader(resp.Body, 4<<20), current.textChannel, recent)
 }
 
 type nextText struct {
@@ -72,7 +73,7 @@ func (t nextText) value() string {
 }
 
 // shortcut: use the desktop sidebar's first page, add renderers or pagination if it stops yielding tracks.
-func parseNextTrack(body io.Reader, channel snowflake.ID, recent []string) (track, error) {
+func parseNextTracks(body io.Reader, channel snowflake.ID, recent []string) ([]track, error) {
 	type item struct {
 		CompactVideoRenderer struct {
 			VideoID           string
@@ -104,8 +105,10 @@ func parseNextTrack(body io.Reader, channel snowflake.ID, recent []string) (trac
 		}
 	}
 	if err := json.NewDecoder(body).Decode(&data); err != nil {
-		return track{}, err
+		return nil, err
 	}
+	picks := make([]track, 0, autoplayBatchSize)
+	seen := make(map[string]bool)
 	for _, entry := range data.Contents.TwoColumnWatchNextResults.SecondaryResults.SecondaryResults.Results {
 		v := entry.CompactVideoRenderer
 		id, title, seconds := v.VideoID, v.Title.value(), nextDuration(v.LengthText.value())
@@ -120,12 +123,16 @@ func parseNextTrack(body io.Reader, channel snowflake.ID, recent []string) (trac
 				}
 			}
 		}
-		if !videoID.MatchString(id) || slices.Contains(recent, id) || seconds <= 0 || seconds > 600 || strings.TrimSpace(title) == "" {
+		if !videoID.MatchString(id) || seen[id] || slices.Contains(recent, id) || seconds <= 0 || seconds > 600 || strings.TrimSpace(title) == "" {
 			continue
 		}
-		return track{id: id, media: media{Title: title}, textChannel: channel}, nil
+		picks = append(picks, track{id: id, media: media{Title: title}, textChannel: channel})
+		seen[id] = true
+		if len(picks) == autoplayBatchSize {
+			break
+		}
 	}
-	return track{}, nil
+	return picks, nil
 }
 
 func nextDuration(raw string) int {

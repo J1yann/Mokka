@@ -2,3 +2,4 @@
 /extractor/target/
 .env
 /mokka.conf
+/mokka-state/

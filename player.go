@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,40 +19,60 @@ import (
 
 type track struct {
 	media
-	id          string
-	cardID      string
-	query       string
-	textChannel snowflake.ID
+	id           string
+	cardID       string
+	query        string
+	textChannel  snowflake.ID
+	autoplayPick bool
 }
 
+var (
+	errNoListeners  = errors.New("no listeners in voice")
+	errTrackSkipped = errors.New("track skipped")
+)
+
 type player struct {
-	ctx           context.Context
-	client        *bot.Client
-	guild         snowflake.ID
-	extractor     string
-	mediaProxy    string
-	searchSlot    chan struct{}
-	playbackSlots chan struct{}
-	idleTimeout   time.Duration
-	opusBitrate   int
-	wake          chan struct{}
-	responseMu    sync.Mutex
-	responses     map[snowflake.ID]responseCard
+	ctx             context.Context
+	client          *bot.Client
+	guild           snowflake.ID
+	extractor       string
+	preferencesPath string
+	mediaProxy      string
+	searchSlot      chan struct{}
+	playbackSlots   chan struct{}
+	idleTimeout     time.Duration
+	opusBitrate     int
+	wake            chan struct{}
+	responseMu      sync.Mutex
+	responses       map[snowflake.ID]responseCard
 
 	mu            sync.Mutex
 	channel       snowflake.ID
 	queue         []track
 	current       track
-	cancel        context.CancelFunc
+	cancel        context.CancelCauseFunc
+	pauseAudio    context.CancelCauseFunc
 	volumeUpdates chan int
 	volume        int
 	running       bool
 	leaving       bool
+	idleExpired   bool
 	repeat        bool
 	autoplay      bool
 	waiting       bool
+	findingNext   bool
 	generation    uint64
 	done          chan struct{}
+}
+
+const (
+	joinVoiceMessage      = "Join a voice channel to use this command."
+	joinMokkaVoiceMessage = "Join Mokka’s voice channel and try again."
+)
+
+func (p *player) inVoice(user snowflake.ID) bool {
+	state, ok := p.client.Caches.VoiceState(p.guild, user)
+	return ok && state.ChannelID != nil
 }
 
 func (p *player) enqueue(user, textChannel snowflake.ID, query string) string {
@@ -63,7 +84,7 @@ func (p *player) enqueue(user, textChannel snowflake.ID, query string) string {
 	}
 	state, ok := p.client.Caches.VoiceState(p.guild, user)
 	if !ok || state.ChannelID == nil {
-		return "Join a voice channel first."
+		return joinVoiceMessage
 	}
 	channel := *state.ChannelID
 	p.mu.Lock()
@@ -95,11 +116,11 @@ func (p *player) enqueue(user, textChannel snowflake.ID, query string) string {
 	case p.ctx.Err() != nil || generation != p.generation:
 		return "Playback was stopped before the track could be queued."
 	case !ok || state.ChannelID == nil || *state.ChannelID != channel:
-		return "Join the voice channel again and retry."
+		return "Rejoin the voice channel and request the song again."
 	case p.leaving:
 		return "Mokka is leaving voice. Try again in a moment."
 	case p.channel != 0 && p.channel != channel:
-		return "Mokka is playing in another voice channel."
+		return joinMokkaVoiceMessage
 	case len(p.queue) >= 25:
 		return "The queue is full."
 	}
@@ -111,7 +132,11 @@ func (p *player) enqueue(user, textChannel snowflake.ID, query string) string {
 		p.done = make(chan struct{})
 		go p.run()
 	}
-	return "Queued " + escapeCardText(label(t.Title))
+	title := escapeCardText(label(t.Title))
+	if len(p.queue) == 1 {
+		return "Added **" + title + "** to the queue. It’s next."
+	}
+	return fmt.Sprintf("Added **%s** to the queue at position %d.", title, len(p.queue))
 }
 
 func (p *player) wakeWorker() {
@@ -124,14 +149,17 @@ func (p *player) wakeWorker() {
 func (p *player) run() {
 	watch, stopWatch := context.WithCancel(p.ctx)
 	defer stopWatch()
-	if p.idleTimeout > 0 {
-		go p.watchVoice(watch)
-	}
+	go p.watchVoice(watch)
 	var conn voice.Conn
 	var recent []string
+	var picks []track
+	var advanceAutoplay, autoplayAfterSkip bool
+	var lastTrack track
 	for {
 		p.mu.Lock()
-		if len(p.queue) == 0 && conn != nil && !p.leaving && p.ctx.Err() == nil {
+		playRecommendation := advanceAutoplay && p.canAutoplay(autoplayAfterSkip)
+		advanceAutoplay = false
+		if len(p.queue) == 0 && !playRecommendation && conn != nil && !p.leaving && p.ctx.Err() == nil {
 			select {
 			case <-p.wake:
 			default:
@@ -140,31 +168,51 @@ func (p *player) run() {
 			p.waitIdle()
 			continue
 		}
-		if len(p.queue) == 0 || p.leaving || p.ctx.Err() != nil {
+		if (len(p.queue) == 0 && !playRecommendation) || p.leaving || p.ctx.Err() != nil {
 			p.leaving = true
 			p.mu.Unlock()
 			p.closeVoice(conn)
 			stopWatch()
 			p.mu.Lock()
+			expired := p.idleExpired
+			p.idleExpired = false
 			p.running, p.leaving, p.channel = false, false, 0
 			p.repeat = false
 			close(p.done)
 			p.mu.Unlock()
+			if expired && lastTrack.textChannel != 0 {
+				p.notify(lastTrack, card("Left voice", "Mokka left after being idle. Play a song to bring it back.", ""))
+			}
 			return
 		}
-		t := p.queue[0]
+		var t track
+		if playRecommendation {
+			t = picks[0]
+			picks = picks[1:]
+			t.textChannel = lastTrack.textChannel
+			t.autoplayPick = true
+		} else {
+			t = p.queue[0]
+			p.queue[0] = track{}
+			p.queue = p.queue[1:]
+			if !t.autoplayPick {
+				picks = nil
+			}
+		}
+		lastTrack = t
 		t.cardID = rand.Text()
 		recent = append(recent, t.id)
 		if len(recent) > 20 {
 			recent = recent[1:]
 		}
-		p.queue[0] = track{}
-		p.queue = p.queue[1:]
 		channel := p.channel
-		ctx, cancel := context.WithCancel(p.ctx)
+		ctx, cancel := context.WithCancelCause(p.ctx)
 		p.current, p.cancel = t, cancel
 		p.mu.Unlock()
 
+		if playRecommendation {
+			go p.notify(t, card("Autoplay", "Playing "+escapeCardText(label(t.Title))+" next from recommendations.", ""))
+		}
 		var sent time.Duration
 		var err error
 		conn, sent, err = p.playQueuedTrack(ctx, conn, channel, t)
@@ -179,32 +227,114 @@ func (p *player) run() {
 		}
 		p.mu.Lock()
 		finished := err == nil && ctx.Err() == nil && !p.leaving
-		if finished && p.autoplay && !p.repeat && len(p.queue) == 0 && p.hasListener(channel) {
-			p.mu.Unlock()
-			next, err := p.nextTrack(ctx, t, recent)
-			if err != nil && ctx.Err() == nil {
-				slog.Warn("autoplay lookup failed", "video", t.id, "error", err)
+		skipped := context.Cause(ctx) == errTrackSkipped && !p.leaving
+		noRecommendation := false
+		if (finished || skipped) && p.canAutoplay(skipped) {
+			picks = slices.DeleteFunc(picks, func(candidate track) bool {
+				return slices.Contains(recent, candidate.id)
+			})
+			if len(picks) == 0 {
+				lookupCtx, cancelLookup := context.WithCancelCause(p.ctx)
+				p.cancel, p.findingNext = cancelLookup, true
+				p.mu.Unlock()
+				next, lookupErr := p.nextTracks(lookupCtx, t, recent)
+				if lookupErr != nil && lookupCtx.Err() == nil {
+					slog.Warn("autoplay lookup failed", "video", t.id, "error", lookupErr)
+				}
+				p.mu.Lock()
+				active := lookupCtx.Err() == nil && !p.leaving
+				cancelLookup(nil)
+				p.findingNext = false
+				if active && p.autoplay {
+					picks = next
+					noRecommendation = len(next) == 0 && p.canAutoplay(skipped)
+				}
 			}
-			p.mu.Lock()
-			finished = ctx.Err() == nil && !p.leaving
-			if finished && p.autoplay && !p.repeat && len(p.queue) == 0 && next.id != "" && p.hasListener(channel) {
-				p.queue = append(p.queue, next)
-			}
+			advanceAutoplay = len(picks) > 0 && p.canAutoplay(skipped)
+			autoplayAfterSkip = skipped
 		}
-		if finished && p.repeat {
+		if finished && !p.leaving && p.ctx.Err() == nil && p.repeat {
 			p.queue = append([]track{t}, p.queue...)
 		}
-		queueFinished := finished && len(p.queue) == 0
-		cancel()
+		queueFinished := (finished || skipped) && !p.leaving && p.ctx.Err() == nil && len(p.queue) == 0 && !advanceAutoplay
+		cancel(nil)
 		p.current, p.cancel, p.waiting = track{}, nil, false
 		p.mu.Unlock()
 		if queueFinished {
-			p.showPlaybackFinished(t.textChannel)
+			p.showPlaybackFinished(t.textChannel, noRecommendation)
 		}
 	}
 }
 
+// canAutoplay runs with the player's mutex held.
+func (p *player) canAutoplay(skipped bool) bool {
+	return p.autoplay && (skipped || !p.repeat) && len(p.queue) == 0 && p.hasListener(p.channel)
+}
+
 func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track) (voice.Conn, time.Duration, error) {
+	var sent time.Duration
+	var pauseNotice chan struct{}
+	onResume := func() {
+		if pauseNotice == nil {
+			return
+		}
+		posted := pauseNotice
+		pauseNotice = nil
+		go func() {
+			<-posted
+			p.notify(t, card("Playback resumed", "Picking up where the song paused.", ""))
+		}()
+	}
+	for {
+		if err := p.waitForListener(ctx, channel); err != nil {
+			return conn, sent, err
+		}
+		audioCtx, cancel := context.WithCancelCause(ctx)
+		p.mu.Lock()
+		p.pauseAudio = cancel
+		if !p.hasListener(channel) {
+			cancel(errNoListeners)
+		}
+		p.mu.Unlock()
+
+		var err error
+		conn, sent, err = p.playWhileListening(audioCtx, conn, channel, t, sent, onResume)
+		p.mu.Lock()
+		p.pauseAudio = nil
+		p.mu.Unlock()
+		paused := context.Cause(audioCtx) == errNoListeners
+		cancel(nil)
+		if err == nil || !paused || ctx.Err() != nil {
+			return conn, sent, err
+		}
+		if sent > 0 && pauseNotice == nil {
+			posted := make(chan struct{})
+			pauseNotice = posted
+			go func() {
+				defer close(posted)
+				p.notify(t, card("Playback paused", "The voice channel is empty. Join to pick up where the song left off.", ""))
+			}()
+		}
+	}
+}
+
+func (p *player) waitForListener(ctx context.Context, channel snowflake.ID) error {
+	if p.hasListener(channel) {
+		return ctx.Err()
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for !p.hasListener(channel) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	return ctx.Err()
+}
+
+func (p *player) playWhileListening(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, sent time.Duration, onResume func()) (voice.Conn, time.Duration, error) {
 	select {
 	case p.playbackSlots <- struct{}{}:
 	default:
@@ -214,7 +344,10 @@ func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel s
 		select {
 		case p.playbackSlots <- struct{}{}:
 		case <-ctx.Done():
-			return conn, 0, ctx.Err()
+			p.mu.Lock()
+			p.waiting = false
+			p.mu.Unlock()
+			return conn, sent, ctx.Err()
 		}
 		p.mu.Lock()
 		p.waiting = false
@@ -222,11 +355,10 @@ func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel s
 	}
 	defer func() { <-p.playbackSlots }()
 	if err := ctx.Err(); err != nil {
-		return conn, 0, err
+		return conn, sent, err
 	}
-	var sent time.Duration
 	for attempt := 0; ; {
-		next, played, err := p.playTrack(ctx, conn, channel, t, sent)
+		next, played, err := p.playTrack(ctx, conn, channel, t, sent, onResume)
 		sent += played
 		if err == nil || ctx.Err() != nil {
 			return next, sent, err
@@ -241,11 +373,31 @@ func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel s
 			return conn, sent, err
 		}
 		attempt++
+		if errors.As(err, &voiceErr) {
+			result := make(chan string, 1)
+			resumed := false
+			defer func() {
+				if !resumed {
+					message := "Playback couldn’t reconnect."
+					if ctx.Err() != nil {
+						message = "Reconnect canceled."
+					}
+					result <- message
+				}
+			}()
+			go p.showReconnect(ctx, t.textChannel, result)
+			afterResume := onResume
+			onResume = func() {
+				resumed = true
+				result <- "Playback resumed."
+				afterResume()
+			}
+		}
 		slog.Info("retrying playback", "video", t.id, "resume_at", sent, "error", err)
 	}
 }
 
-func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, start time.Duration) (voice.Conn, time.Duration, error) {
+func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, start time.Duration, onResume func()) (voice.Conn, time.Duration, error) {
 	result, err := extract(ctx, p.extractor, p.mediaProxy, "resolve", t.id)
 	if err != nil {
 		return conn, 0, fmt.Errorf("resolve audio: %w", err)
@@ -272,9 +424,12 @@ func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowfla
 	if err != nil {
 		return conn, 0, voiceWriteError{fmt.Errorf("start speaking: %w", err)}
 	}
-	var onStart func()
+	onStart := onResume
 	if start == 0 {
-		onStart = func() { go p.notify(t, nowPlayingCard(t)) }
+		onStart = func() {
+			onResume()
+			go p.notify(t, nowPlayingCard(t))
+		}
 	}
 	updates := make(chan int, 1)
 	p.mu.Lock()
@@ -303,7 +458,8 @@ func (p *player) waitIdle() {
 	case <-p.wake:
 	case <-timer.C:
 		p.mu.Lock()
-		if len(p.queue) == 0 {
+		if len(p.queue) == 0 && !p.leaving {
+			p.idleExpired = true
 			p.leaveLocked()
 		}
 		p.mu.Unlock()
@@ -311,7 +467,11 @@ func (p *player) waitIdle() {
 }
 
 func (p *player) watchVoice(ctx context.Context) {
-	ticker := time.NewTicker(min(p.idleTimeout, time.Second))
+	interval := time.Second
+	if p.idleTimeout > 0 {
+		interval = min(p.idleTimeout, interval)
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var emptySince time.Time
 	for {
@@ -326,12 +486,18 @@ func (p *player) watchVoice(ctx context.Context) {
 			}
 			if p.hasListener(p.channel) {
 				emptySince = time.Time{}
-			} else if emptySince.IsZero() {
-				emptySince = now
-			} else if now.Sub(emptySince) >= p.idleTimeout {
-				p.leaveLocked()
-				p.mu.Unlock()
-				return
+			} else {
+				if p.pauseAudio != nil {
+					p.pauseAudio(errNoListeners)
+				}
+				if emptySince.IsZero() {
+					emptySince = now
+				} else if p.idleTimeout > 0 && now.Sub(emptySince) >= p.idleTimeout {
+					p.idleExpired = true
+					p.leaveLocked()
+					p.mu.Unlock()
+					return
+				}
 			}
 			p.mu.Unlock()
 		}
@@ -353,7 +519,7 @@ func (p *player) leaveLocked() {
 	p.queue = nil
 	p.repeat = false
 	if p.cancel != nil {
-		p.cancel()
+		p.cancel(nil)
 	}
 	p.wakeWorker()
 }
@@ -404,20 +570,30 @@ func (p *player) controls(command string, user snowflake.ID, cardID string) stri
 	}
 	state, ok := p.client.Caches.VoiceState(p.guild, user)
 	if !ok || state.ChannelID == nil || *state.ChannelID != p.channel {
-		return "Join Mokka's voice channel first."
+		return joinMokkaVoiceMessage
 	}
 	if command == "skip" && p.cancel == nil {
 		return "Wait for the next track to start."
 	}
 	if command == "skip" {
-		p.cancel()
-		return "Skipped " + escapeCardText(label(p.current.Title))
+		if p.findingNext {
+			return "Finding the next track…"
+		}
+		p.cancel(errTrackSkipped)
+		message := "Skipped " + escapeCardText(label(p.current.Title)) + "."
+		if p.canAutoplay(true) {
+			message += " Finding the next track…"
+		}
+		return message
 	}
 	p.leaveLocked()
 	return "Stopped playback and cleared the queue."
 }
 
 func (p *player) playbackCard(name, cardID string, user snowflake.ID) discord.MessageCreate {
+	if !p.inVoice(user) {
+		return commandCard(name, joinVoiceMessage, "")
+	}
 	p.mu.Lock()
 	t := p.current
 	p.mu.Unlock()

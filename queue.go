@@ -10,6 +10,8 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
+const preferenceSaveMessage = "Mokka couldn’t save that setting. Your previous setting is still active."
+
 func (p *player) editQueue(name, input string, user snowflake.ID) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -18,7 +20,7 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 	}
 	state, ok := p.client.Caches.VoiceState(p.guild, user)
 	if !ok || state.ChannelID == nil || *state.ChannelID != p.channel {
-		return "Join Mokka's voice channel first."
+		return joinMokkaVoiceMessage
 	}
 	if name == "volume" {
 		if input != "" {
@@ -27,6 +29,9 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 				return "Use a volume from 0 to 100."
 			}
 			if p.volume != level {
+				if !p.savePreferenceChange(preferences{Autoplay: p.autoplay, Volume: level}) {
+					return preferenceSaveMessage
+				}
 				p.volume = level
 				if updates := p.volumeUpdates; updates != nil {
 					select {
@@ -36,6 +41,9 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 					updates <- level
 				}
 			}
+		}
+		if input != "" {
+			return fmt.Sprintf("Volume set to %d%%.", p.volume)
 		}
 		return fmt.Sprintf("Volume is %d%%.", p.volume)
 	}
@@ -54,16 +62,21 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 		if name == "autoplay" {
 			setting, title = &p.autoplay, "Autoplay"
 		}
+		next := *setting
 		switch strings.ToLower(strings.TrimSpace(input)) {
 		case "":
-			*setting = !*setting
+			next = !next
 		case "on":
-			*setting = true
+			next = true
 		case "off":
-			*setting = false
+			next = false
 		default:
 			return "Use `m!" + name + " on` or `m!" + name + " off`."
 		}
+		if name == "autoplay" && next != p.autoplay && !p.savePreferenceChange(preferences{Autoplay: next, Volume: p.volume}) {
+			return preferenceSaveMessage
+		}
+		*setting = next
 		if *setting {
 			return title + " is on."
 		}
@@ -104,4 +117,25 @@ func (p *player) reorderQueue(name string, args []string) string {
 	}
 	p.queue = slices.Insert(p.queue, to, t)
 	return fmt.Sprintf("Moved %s to position %d.", title, to+1)
+}
+
+func (p *player) playbackDetails() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	onOff := func(enabled bool) string {
+		if enabled {
+			return "On"
+		}
+		return "Off"
+	}
+	lines := []string{
+		"**Autoplay:** " + onOff(p.autoplay),
+		"**Repeat one:** " + onOff(p.repeat),
+		fmt.Sprintf("**Volume:** %d%%", p.volume),
+		fmt.Sprintf("**Tracks queued:** %d", len(p.queue)),
+	}
+	if p.current.id != "" {
+		lines = append(lines, "**Current track:** "+escapeCardText(label(p.current.Title)))
+	}
+	return strings.Join(lines, "\n")
 }

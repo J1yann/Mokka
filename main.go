@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -82,12 +83,22 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	stateDir := cfg.value("MOKKA_STATE_DIR")
+	if stateDir == "" {
+		stateDir = "mokka-state"
+	}
 	players := make(map[snowflake.ID]*player, len(guilds))
 	playbackSlots := make(chan struct{}, 3)
 	for _, guild := range guilds {
+		path := filepath.Join(stateDir, guild.String()+".json")
+		settings, err := loadPreferences(path)
+		if err != nil {
+			slog.Warn("couldn't load preferences; saving disabled for this server", "guild", guild, "error", err)
+			path = ""
+		}
 		players[guild] = &player{ctx: ctx, guild: guild, extractor: extractor, mediaProxy: mediaProxy,
 			searchSlot: make(chan struct{}, 1), playbackSlots: playbackSlots, responses: make(map[snowflake.ID]responseCard),
-			volume: 100, idleTimeout: idleTimeout, opusBitrate: opusBitrate, wake: make(chan struct{}, 1)}
+			preferencesPath: path, autoplay: settings.Autoplay, volume: settings.Volume, idleTimeout: idleTimeout, opusBitrate: opusBitrate, wake: make(chan struct{}, 1)}
 	}
 	findPlayer := func(guild *snowflake.ID) *player {
 		if guild == nil {
@@ -128,7 +139,7 @@ func run() error {
 				name = "volume"
 			}
 			switch name {
-			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "autoplay", "volume", "info":
+			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "autoplay", "volume", "detail", "info":
 			default:
 				return
 			}
@@ -282,6 +293,7 @@ func slashCommands() []discord.ApplicationCommandCreate {
 				discord.ApplicationCommandOptionString{Name: "query", Description: "Song title and optional artist"}}},
 		discord.SlashCommandCreate{Name: "queue", Description: "Show the music queue"},
 		discord.SlashCommandCreate{Name: "info", Description: "About Mokka"},
+		discord.SlashCommandCreate{Name: "help", Description: "Show Mokka’s commands"},
 		discord.SlashCommandCreate{Name: "skip", Description: "Skip the current track"},
 		discord.SlashCommandCreate{Name: "stop", Description: "Stop playback and clear the queue"},
 		discord.SlashCommandCreate{Name: "remove", Description: "Remove a waiting track", Options: []discord.ApplicationCommandOption{
@@ -291,6 +303,7 @@ func slashCommands() []discord.ApplicationCommandCreate {
 			discord.ApplicationCommandOptionInt{Name: "from", Description: "Current position", Required: true},
 			discord.ApplicationCommandOptionInt{Name: "to", Description: "New position", Required: true},
 		}},
+		discord.SlashCommandCreate{Name: "detail", Description: "Show playback settings and queue status"},
 		discord.SlashCommandCreate{Name: "volume", Description: "Show or set playback volume", Options: []discord.ApplicationCommandOption{
 			discord.ApplicationCommandOptionInt{Name: "level", Description: "Volume from 0 to 100 percent"},
 		}},
@@ -298,16 +311,30 @@ func slashCommands() []discord.ApplicationCommandCreate {
 		discord.SlashCommandCreate{Name: "repeat", Description: "Set repeat one or toggle it", Options: []discord.ApplicationCommandOption{
 			discord.ApplicationCommandOptionString{Name: "mode", Description: "On or off"},
 		}},
-		discord.SlashCommandCreate{Name: "autoplay", Description: "Play a YouTube recommendation when the queue ends", Options: []discord.ApplicationCommandOption{
+		discord.SlashCommandCreate{Name: "autoplay", Description: "Play a recommendation when the queue ends", Options: []discord.ApplicationCommandOption{
 			discord.ApplicationCommandOptionString{Name: "mode", Description: "On or off"},
 		}},
 	}
 }
 
 func (p *player) command(name, query string, user, channel snowflake.ID) (string, string) {
+	if !p.inVoice(user) {
+		return joinVoiceMessage, ""
+	}
 	switch name {
 	case "info":
-		return "A lightweight Discord music bot with queue controls and lyrics.\n\nPlay a song with `m!p <title>` or `/play`.\n\nMade with ❤️ by [J1yann](https://github.com/J1yann)", ""
+		return "Thanks for listening with Mokka. Hope you come across a song you’ll want to play again.\n\nMade with ❤️ by [J1yann](https://github.com/J1yann)\n\nUse `/help` to see Mokka’s commands.", ""
+	case "help":
+		var lines []string
+		for _, command := range slashCommands() {
+			if slash, ok := command.(discord.SlashCommandCreate); ok {
+				lines = append(lines, "`/"+slash.Name+"` "+slash.Description)
+			}
+		}
+		lines = append(lines, "", "You can also use music commands with `m!`. Use `m!p` for `m!play` and `m!v` for `m!volume`.")
+		return strings.Join(lines, "\n"), ""
+	case "detail":
+		return p.playbackDetails(), ""
 	case "play":
 		return p.enqueue(user, channel, query), ""
 	case "lyrics":

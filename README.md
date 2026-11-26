@@ -8,6 +8,8 @@ streaming platform API key.
 Join a voice channel and type `m!p One More Time` or use `/play` with a song
 title or YouTube link. The Now Playing card shows the track artwork and gives
 you buttons for the queue, lyrics, skip, and stop.
+Playback pauses when Mokka is alone in voice and resumes from the same position when someone returns before the idle timeout.
+
 When the last song ends, Mokka shows a Playback finished card in the request channel.
 
 ## Commands
@@ -22,11 +24,15 @@ When the last song ends, Mokka shows a Playback finished card in the request cha
 | Edit the queue | `m!remove <position>`, `m!move <from> <to>` | `/remove`, `/move` |
 | Shuffle or repeat | `m!shuffle`, `m!repeat [on or off]` | `/shuffle`, `/repeat` |
 | Autoplay when the queue ends | `m!autoplay [on or off]` | `/autoplay` |
+| Show playback details | `m!detail` | `/detail` |
 | Show or set volume (0–100%) | `m!v [level]` or `m!volume [level]` | `/volume [level]` |
+| List commands | | `/help` |
 | About Mokka | `!info` or `m!info` | `/info` |
 
+Skip bypasses repeat for the current track. If the queue is empty and autoplay is on, Mokka plays recommendations in batches of up to five. Requested tracks take priority and start a fresh batch when the queue runs out.
+
 For example, `m!v 70` or `/volume level:70` changes the volume during playback.
-Omit the level to show the current setting.
+Omit the level to show the current setting. Autoplay and volume are saved per server across restarts.
 
 ## Self-host
 
@@ -40,7 +46,7 @@ Omit the level to show the current setting.
    `azmq` filter (libzmq), plus outbound access to HTTPS and Discord voice UDP.
 
    ```sh
-   CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o mokka .
+   GOEXPERIMENT=jsonv2 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o mokka .
    cargo build --locked --release --manifest-path extractor/Cargo.toml
    ```
 
@@ -58,10 +64,13 @@ Omit the level to show the current setting.
 | Optional setting | Default | What it controls |
 | --- | --- | --- |
 | `MOKKA_GUILD_IDS` | `MOKKA_GUILD_ID` | A comma-separated list of Discord server IDs. Invite Mokka to each listed server. |
+| `MOKKA_STATE_DIR` | `mokka-state` | Writable directory for per-server autoplay and volume settings. |
 | `MOKKA_EXTRACTOR` | `mokka-extractor` on PATH | The example config points to the Cargo build output. Update the path if you move the helper. |
 | `MOKKA_IDLE_TIMEOUT` | `1h` | Leave voice when the queue is empty or the bot is alone for this long. Use a duration such as `15m`, or `0` to disable. |
 | `MOKKA_OPUS_BITRATE_KBPS` | `96` | Stereo Opus target bitrate in kbps. Use a whole number such as `128`. |
 | `MOKKA_MEDIA_PROXY` | Direct connection | An optional HTTP proxy for YouTube search and audio downloads. |
+
+If Mokka logs an invalid preferences file, it uses defaults for that server and leaves the file intact. Fix the file and restart Mokka to re-enable saving.
 
 Each server has its own queue of up to 25 waiting tracks. Queues are stored in
 memory and reset on restart. Up to three servers can play at once. Other servers

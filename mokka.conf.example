@@ -8,3 +8,5 @@ MOKKA_IDLE_TIMEOUT=1h
 MOKKA_OPUS_BITRATE_KBPS=96
 # Optional HTTP proxy for YouTube search and audio.
 MOKKA_MEDIA_PROXY=
+# Optional writable directory for saved playback preferences.
+MOKKA_STATE_DIR=mokka-state

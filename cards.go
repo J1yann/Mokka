@@ -43,8 +43,12 @@ func commandCard(name, message, lyrics string) discord.MessageCreate {
 	switch name {
 	case "info":
 		title = "About Mokka"
+	case "help":
+		title = "Mokka commands"
 	case "queue":
 		title = "Queue"
+	case "detail":
+		title = "Playback details"
 	case "lyrics":
 		title = "Lyrics"
 	}
@@ -109,7 +113,7 @@ func (p *player) showButtonResponse(channel, interaction snowflake.ID, msg disco
 	return p.writeResponseCard(channel, entry, msg, moveToBottom)
 }
 
-func (p *player) showPlaybackFinished(channel snowflake.ID) {
+func (p *player) showPlaybackFinished(channel snowflake.ID, noRecommendation bool) {
 	p.responseMu.Lock()
 	defer p.responseMu.Unlock()
 	p.mu.Lock()
@@ -118,7 +122,11 @@ func (p *player) showPlaybackFinished(channel snowflake.ID) {
 	if !idle {
 		return
 	}
-	msg := card("Playback finished", "Nothing else is queued. Use `m!p <song title>` or `/play` to play another song.", "")
+	message := "Nothing else is queued. Use `m!p <song title>` or `/play` to play another song."
+	if noRecommendation {
+		message = "Couldn’t find another track. Use `m!p <song title>` or `/play` to play another song."
+	}
+	msg := card("Playback finished", message, "")
 	if err := p.writeResponseCard(channel, p.responses[channel], msg, false); err != nil && p.ctx.Err() == nil {
 		slog.Warn("couldn't show playback finished card", "channel", channel, "error", err)
 	}
@@ -168,5 +176,29 @@ func (p *player) writeResponseCard(channel snowflake.ID, entry responseCard, msg
 func sendCard(ctx context.Context, client *bot.Client, channel snowflake.ID, msg discord.MessageCreate) {
 	if _, err := client.Rest.CreateMessage(channel, msg, rest.WithCtx(ctx)); err != nil && ctx.Err() == nil {
 		slog.Warn("couldn't send channel card", "channel", channel, "error", err)
+	}
+}
+
+func (p *player) showReconnect(ctx context.Context, channel snowflake.ID, result <-chan string) {
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-result:
+		return
+	case <-timer.C:
+	}
+	requestCtx, cancel := context.WithTimeout(p.ctx, 3*time.Second)
+	msg, err := p.client.Rest.CreateMessage(channel, card("Playback", "Reconnecting…", ""), rest.WithCtx(requestCtx))
+	cancel()
+	if err != nil {
+		return
+	}
+	message := <-result
+	requestCtx, cancel = context.WithTimeout(p.ctx, 3*time.Second)
+	defer cancel()
+	if _, err := p.client.Rest.UpdateMessage(channel, msg.ID, cardUpdate(card("Playback", message, "")), rest.WithCtx(requestCtx)); err != nil && requestCtx.Err() == nil {
+		slog.Warn("couldn't update reconnect notice", "channel", channel, "error", err)
 	}
 }
