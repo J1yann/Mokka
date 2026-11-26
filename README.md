@@ -19,6 +19,7 @@ When the last song ends, Mokka shows a Playback finished card in the request cha
 | Stop and clear the queue | `m!stop` | `/stop` |
 | Edit the queue | `m!remove <position>`, `m!move <from> <to>` | `/remove`, `/move` |
 | Shuffle or repeat | `m!shuffle`, `m!repeat [on or off]` | `/shuffle`, `/repeat` |
+| Autoplay when the queue ends | `m!autoplay [on or off]` | `/autoplay` |
 | About Mokka | `!info` or `m!info` | `/info` |
 
 ## Self-host
@@ -59,7 +60,8 @@ When the last song ends, Mokka shows a Playback finished card in the request cha
 Each server has its own queue of up to 25 waiting tracks. Queues are stored in
 memory and reset on restart. Up to three servers can play at once. Other servers
 wait for a playback slot. If playback is interrupted, Mokka tries once to
-resume from the last audio it sent.
+resume from the last audio it sent. Autoplay is off by default and uses
+YouTube recommendations up to ten minutes long.
 
 ## Under the hood
 

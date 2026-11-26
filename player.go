@@ -46,6 +46,7 @@ type player struct {
 	running    bool
 	leaving    bool
 	repeat     bool
+	autoplay   bool
 	waiting    bool
 	generation uint64
 	done       chan struct{}
@@ -125,6 +126,7 @@ func (p *player) run() {
 		go p.watchVoice(watch)
 	}
 	var conn voice.Conn
+	var recent []string
 	for {
 		p.mu.Lock()
 		if len(p.queue) == 0 && conn != nil && !p.leaving && p.ctx.Err() == nil {
@@ -150,6 +152,10 @@ func (p *player) run() {
 		}
 		t := p.queue[0]
 		t.cardID = rand.Text()
+		recent = append(recent, t.id)
+		if len(recent) > 20 {
+			recent = recent[1:]
+		}
 		p.queue[0] = track{}
 		p.queue = p.queue[1:]
 		channel := p.channel
@@ -171,6 +177,18 @@ func (p *player) run() {
 		}
 		p.mu.Lock()
 		finished := err == nil && ctx.Err() == nil && !p.leaving
+		if finished && p.autoplay && !p.repeat && len(p.queue) == 0 && p.hasListener(channel) {
+			p.mu.Unlock()
+			next, err := p.nextTrack(ctx, t, recent)
+			if err != nil && ctx.Err() == nil {
+				slog.Warn("autoplay lookup failed", "video", t.id, "error", err)
+			}
+			p.mu.Lock()
+			finished = ctx.Err() == nil && !p.leaving
+			if finished && p.autoplay && !p.repeat && len(p.queue) == 0 && next.id != "" && p.hasListener(channel) {
+				p.queue = append(p.queue, next)
+			}
+		}
 		if finished && p.repeat {
 			p.queue = append([]track{t}, p.queue...)
 		}

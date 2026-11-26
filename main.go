@@ -123,7 +123,7 @@ func run() error {
 				name = "play"
 			}
 			switch name {
-			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "info":
+			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "autoplay", "info":
 			default:
 				return
 			}
@@ -158,7 +158,7 @@ func run() error {
 						query = strconv.Itoa(data.Int("position"))
 					case "move":
 						query = strconv.Itoa(data.Int("from")) + " " + strconv.Itoa(data.Int("to"))
-					case "repeat":
+					case "repeat", "autoplay":
 						query, _ = data.OptString("mode")
 					}
 					slog.Info("slash command received", "command", data.CommandName(), "channel", e.Channel().ID())
@@ -286,6 +286,9 @@ func slashCommands() []discord.ApplicationCommandCreate {
 		discord.SlashCommandCreate{Name: "repeat", Description: "Set repeat one or toggle it", Options: []discord.ApplicationCommandOption{
 			discord.ApplicationCommandOptionString{Name: "mode", Description: "On or off"},
 		}},
+		discord.SlashCommandCreate{Name: "autoplay", Description: "Play a YouTube recommendation when the queue ends", Options: []discord.ApplicationCommandOption{
+			discord.ApplicationCommandOptionString{Name: "mode", Description: "On or off"},
+		}},
 	}
 }
 
@@ -299,7 +302,7 @@ func (p *player) command(name, query string, user, channel snowflake.ID) (string
 		return p.lookupLyrics(query, "")
 	case "queue", "skip", "stop":
 		return p.controls(name, user, ""), ""
-	case "remove", "move", "shuffle", "repeat":
+	case "remove", "move", "shuffle", "repeat", "autoplay":
 		return p.editQueue(name, query, user), ""
 	default:
 		return "Unknown command.", ""

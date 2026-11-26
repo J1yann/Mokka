@@ -30,21 +30,25 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 		}
 		rand.Shuffle(len(p.queue), func(i, j int) { p.queue[i], p.queue[j] = p.queue[j], p.queue[i] })
 		return fmt.Sprintf("Shuffled %d queued tracks.", len(p.queue))
-	case "repeat":
+	case "repeat", "autoplay":
+		setting, title := &p.repeat, "Repeat one"
+		if name == "autoplay" {
+			setting, title = &p.autoplay, "Autoplay"
+		}
 		switch strings.ToLower(strings.TrimSpace(input)) {
 		case "":
-			p.repeat = !p.repeat
+			*setting = !*setting
 		case "on":
-			p.repeat = true
+			*setting = true
 		case "off":
-			p.repeat = false
+			*setting = false
 		default:
-			return "Use `m!repeat on` or `m!repeat off`."
+			return "Use `m!" + name + " on` or `m!" + name + " off`."
 		}
-		if p.repeat {
-			return "Repeat one is on."
+		if *setting {
+			return title + " is on."
 		}
-		return "Repeat one is off."
+		return title + " is off."
 	default:
 		return "Unknown queue command."
 	}
