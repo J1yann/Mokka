@@ -36,47 +36,47 @@ Omit the level to show the current setting. Autoplay and volume are saved per se
 
 ## Self-host
 
-1. **Create and invite your bot.** Enable **Message Content Intent** under
-   **Bot** for prefix commands. Use **Guild Install** with the `bot` and
-   `applications.commands` scopes. In the channels Mokka will use, grant
-   **View Channel**, **Send Messages**, **Read Message History**,
-   **Attach Files**, **Connect**, and **Speak**. [Discord Developer Portal](https://discord.com/developers/applications)
-2. **Install Mokka.** FFmpeg needs the `libopus` encoder and `azmq` filter.
-   On Debian or Ubuntu, install it with `sudo apt update && sudo apt install ffmpeg`.
-   Mokka also needs outbound HTTPS and Discord voice UDP.
-
-   **Prebuilt Linux x86-64 (Ubuntu 22.04 or compatible).** Download
-   `mokka-linux-amd64.tar.gz` and `SHA256SUMS` from
-   [GitHub Releases](https://github.com/J1yann/Mokka/releases). Verify and extract
-   them in the download directory.
+1. Create a bot and invite it with **Guild Install** and the `bot` and
+   `applications.commands` scopes. Enable **Message Content Intent** for
+   prefix commands. Grant **View Channel**, **Send Messages**, **Read Message
+   History**, **Attach Files**, **Connect**, and **Speak**. [Discord Developer Portal](https://discord.com/developers/applications)
+2. Install FFmpeg on Debian or Ubuntu with `sudo apt update && sudo apt install ffmpeg`.
+   Mokka needs the `libopus` encoder, the `azmq` filter, outbound HTTPS, and Discord voice UDP.
+3. For Linux x86-64 (Ubuntu 22.04 or compatible), download
+   `mokka-linux-amd64.tar.gz`. It includes Mokka and the extractor.
+   `SHA256SUMS` is optional if you want to verify the download. [GitHub Releases](https://github.com/J1yann/Mokka/releases)
 
    ```sh
-   sha256sum -c SHA256SUMS
    tar -xzf mokka-linux-amd64.tar.gz
    cd mokka-linux-amd64
    ```
 
-   The archive contains both binaries. Its example config points to the
-   bundled extractor. The release tag includes the extractor source, and
-   [Cargo.toml](extractor/Cargo.toml) pins the exact Strawcore source revision.
-
-   **Build from source.** In the repository, use Go 1.26, Cargo, and a C compiler.
-
-   ```sh
-   GOEXPERIMENT=jsonv2 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o mokka .
-   cargo build --locked --release --manifest-path extractor/Cargo.toml
-   ```
-
-3. **Configure and start.** Copy the [example config](mokka.conf.example) and
-   add your bot token and Discord server ID. Mokka reads `mokka.conf` from its
-   working directory and registers slash commands in the configured server.
-   Keep `mokka.conf` private. Environment variables override file values.
+4. Copy the [example config](mokka.conf.example), fill in your bot token and
+   server ID, then start Mokka. Keep `mokka.conf` private.
 
    ```sh
    install -m 600 mokka.conf.example mokka.conf
    # Fill in DISCORD_TOKEN and MOKKA_GUILD_ID before starting.
    ./mokka
    ```
+
+<details>
+<summary>Build from source</summary>
+
+Run these in the repository with Go 1.26, Cargo, and a C compiler, then follow
+step 4. The release tag includes the extractor source. [Pinned Strawcore version](extractor/Cargo.toml)
+
+```sh
+GOEXPERIMENT=jsonv2 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o mokka .
+cargo build --locked --release --manifest-path extractor/Cargo.toml
+```
+
+</details>
+
+<details>
+<summary>Optional settings</summary>
+
+Environment variables override `mokka.conf`.
 
 | Optional setting | Default | What it controls |
 | --- | --- | --- |
@@ -91,9 +91,11 @@ If Mokka logs an invalid preferences file, it uses defaults for that server and 
 
 Each server has its own queue of up to 25 waiting tracks. Queues are stored in
 memory and reset on restart. Up to three servers can play at once. Other servers
-wait for a playback slot. If playback is interrupted, Mokka tries once to
-resume from the last audio it sent. Autoplay is off by default and uses
-YouTube recommendations up to ten minutes long.
+wait for a playback slot. On a voice disconnect, Mokka tries to resume from
+the last audio it sent. Autoplay is off by default and uses YouTube
+recommendations up to ten minutes long.
+
+</details>
 
 ## Under the hood
 
