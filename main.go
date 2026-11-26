@@ -57,10 +57,10 @@ func run() error {
 		return errors.New("set MOKKA_EXTRACTOR to the path of the compiled extractor")
 	}
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return errors.New("FFmpeg must be installed")
+		return errors.New("FFmpeg must be installed. On Debian or Ubuntu, run `sudo apt update && sudo apt install ffmpeg`")
 	}
 	if output, err := exec.Command("ffmpeg", "-hide_banner", "-h", "filter=azmq").Output(); err != nil || !strings.HasPrefix(string(output), "Filter azmq") {
-		return errors.New("FFmpeg must include the azmq filter (libzmq)")
+		return errors.New("FFmpeg must include the azmq filter (libzmq). On Debian or Ubuntu, run `sudo apt update && sudo apt install ffmpeg` and make sure the packaged ffmpeg is first on PATH")
 	}
 	opusBitrate, err := configuredOpusBitrate(cfg.value("MOKKA_OPUS_BITRATE_KBPS"))
 	if err != nil {

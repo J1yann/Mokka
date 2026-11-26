@@ -41,9 +41,26 @@ Omit the level to show the current setting. Autoplay and volume are saved per se
    `applications.commands` scopes. In the channels Mokka will use, grant
    **View Channel**, **Send Messages**, **Read Message History**,
    **Attach Files**, **Connect**, and **Speak**. [Discord Developer Portal](https://discord.com/developers/applications)
-2. **Build Mokka and its extractor.** You'll need Go 1.26, Cargo, and a C
-   compiler on the build machine. The runtime needs FFmpeg with libopus and the
-   `azmq` filter (libzmq), plus outbound access to HTTPS and Discord voice UDP.
+2. **Install Mokka.** FFmpeg needs the `libopus` encoder and `azmq` filter.
+   On Debian or Ubuntu, install it with `sudo apt update && sudo apt install ffmpeg`.
+   Mokka also needs outbound HTTPS and Discord voice UDP.
+
+   **Prebuilt Linux x86-64 (Ubuntu 22.04 or compatible).** Download
+   `mokka-linux-amd64.tar.gz` and `SHA256SUMS` from
+   [GitHub Releases](https://github.com/J1yann/Mokka/releases). Verify and extract
+   them in the download directory.
+
+   ```sh
+   sha256sum -c SHA256SUMS
+   tar -xzf mokka-linux-amd64.tar.gz
+   cd mokka-linux-amd64
+   ```
+
+   The archive contains both binaries. Its example config points to the
+   bundled extractor. The release tag includes the extractor source, and
+   [Cargo.toml](extractor/Cargo.toml) pins the exact Strawcore source revision.
+
+   **Build from source.** In the repository, use Go 1.26, Cargo, and a C compiler.
 
    ```sh
    GOEXPERIMENT=jsonv2 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o mokka .
@@ -65,7 +82,7 @@ Omit the level to show the current setting. Autoplay and volume are saved per se
 | --- | --- | --- |
 | `MOKKA_GUILD_IDS` | `MOKKA_GUILD_ID` | A comma-separated list of Discord server IDs. Invite Mokka to each listed server. |
 | `MOKKA_STATE_DIR` | `mokka-state` | Writable directory for per-server autoplay and volume settings. |
-| `MOKKA_EXTRACTOR` | `mokka-extractor` on PATH | The example config points to the Cargo build output. Update the path if you move the helper. |
+| `MOKKA_EXTRACTOR` | `mokka-extractor` on PATH | The example config points to the bundled extractor or the Cargo build output. Update the path if you move the helper. |
 | `MOKKA_IDLE_TIMEOUT` | `1h` | Leave voice when the queue is empty or the bot is alone for this long. Use a duration such as `15m`, or `0` to disable. |
 | `MOKKA_OPUS_BITRATE_KBPS` | `96` | Stereo Opus target bitrate in kbps. Use a whole number such as `128`. |
 | `MOKKA_MEDIA_PROXY` | Direct connection | An optional HTTP proxy for YouTube search and audio downloads. |

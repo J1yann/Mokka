@@ -1,0 +1,98 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    env:
+      GOEXPERIMENT: jsonv2
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('extractor/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Test and build
+        run: |
+          go test -race ./...
+          CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o mokka .
+          cargo +stable build --locked --release --manifest-path extractor/Cargo.toml
+      - name: Package and smoke-test Linux x86-64
+        shell: bash
+        run: |
+          mkdir -p dist/mokka-linux-amd64
+          bundle=dist/mokka-linux-amd64
+          install -m 755 mokka extractor/target/release/mokka-extractor "$bundle"
+          sed 's|^MOKKA_EXTRACTOR=.*|MOKKA_EXTRACTOR=./mokka-extractor|' mokka.conf.example > "$bundle/mokka.conf.example"
+          cp README.md "$bundle/"
+          strawcore_manifest=$(cargo +stable metadata --locked --format-version 1 --manifest-path extractor/Cargo.toml |
+            jq -er '.packages[] | select(.name == "strawcore-core").manifest_path')
+          strawcore_root=$(git -C "$(dirname "$strawcore_manifest")" rev-parse --show-toplevel)
+          cp "$strawcore_root/LICENSE" "$bundle/LICENSE-extractor"
+          (
+            cd "$bundle"
+            if output=$(./mokka 2>&1); then exit 1; fi
+            printf '%s\n' "$output" | grep -F 'set DISCORD_TOKEN'
+            if output=$(./mokka-extractor 2>&1); then exit 1; fi
+            printf '%s\n' "$output" | grep -F 'Missing command'
+            ffmpeg -hide_banner -h filter=azmq | grep '^Filter azmq'
+            ffmpeg -hide_banner -h encoder=libopus | grep '^Encoder libopus'
+          )
+          tar -C dist -czf dist/mokka-linux-amd64.tar.gz mokka-linux-amd64
+          cd dist
+          sha256sum mokka-linux-amd64.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mokka-linux-amd64
+          path: |
+            dist/mokka-linux-amd64.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: mokka-linux-amd64
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a release tag like v0.1.0" >&2
+            exit 1
+          fi
+          sha256sum -c SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" mokka-linux-amd64.tar.gz SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
