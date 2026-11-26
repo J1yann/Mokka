@@ -13,6 +13,7 @@ import (
 
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 )
@@ -357,44 +358,100 @@ func (p *player) playWhileListening(ctx context.Context, conn voice.Conn, channe
 	if err := ctx.Err(); err != nil {
 		return conn, sent, err
 	}
-	for attempt := 0; ; {
-		next, played, err := p.playTrack(ctx, conn, channel, t, sent, onResume)
-		sent += played
-		if err == nil || ctx.Err() != nil {
-			return next, sent, err
-		}
-		conn = next
+	mediaRetried := false
+	conn, played, err := p.playTrack(ctx, conn, channel, t, sent, onResume)
+	sent += played
+	for err != nil && ctx.Err() == nil {
 		var voiceErr voiceWriteError
 		if errors.As(err, &voiceErr) {
-			p.closeVoice(conn)
-			conn = nil
-		}
-		if attempt == 1 {
-			return conn, sent, err
-		}
-		attempt++
-		if errors.As(err, &voiceErr) {
-			result := make(chan string, 1)
-			resumed := false
-			defer func() {
-				if !resumed {
-					message := "Playback couldn’t reconnect."
-					if ctx.Err() != nil {
-						message = "Reconnect canceled."
-					}
-					result <- message
-				}
-			}()
-			go p.showReconnect(ctx, t.textChannel, result)
-			afterResume := onResume
-			onResume = func() {
-				resumed = true
-				result <- "Playback resumed."
-				afterResume()
+			var resumed bool
+			slog.Info("recovering voice", "video", t.id, "resume_at", sent, "error", err)
+			conn, sent, err, resumed = p.recoverVoicePlayback(ctx, conn, channel, t, sent, onResume)
+			if !resumed {
+				break
 			}
+			continue
 		}
+		if mediaRetried {
+			break
+		}
+		mediaRetried = true
 		slog.Info("retrying playback", "video", t.id, "resume_at", sent, "error", err)
+		conn, played, err = p.playTrack(ctx, conn, channel, t, sent, onResume)
+		sent += played
 	}
+	return conn, sent, err
+}
+
+func (p *player) recoverVoicePlayback(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, sent time.Duration, onResume func()) (voice.Conn, time.Duration, error, bool) {
+	recovery, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	timer := time.AfterFunc(30*time.Second, func() { cancel(context.DeadlineExceeded) })
+	defer timer.Stop()
+
+	result := make(chan string, 1)
+	go p.showReconnect(ctx, t.textChannel, result)
+	resumed := false
+	defer func() {
+		if !resumed {
+			message := "Playback couldn’t reconnect."
+			if ctx.Err() != nil {
+				message = "Reconnect canceled."
+			}
+			result <- message
+		}
+	}()
+	onAudio := func() {
+		// Once audio is flowing, the recovery deadline must not stop the song.
+		if timer.Stop() && recovery.Err() == nil {
+			resumed = true
+			slog.Info("voice playback recovered", "video", t.id, "resume_at", sent)
+			result <- "Playback resumed."
+			onResume()
+		}
+	}
+	shard, err := p.client.Shard(p.guild)
+	if err != nil {
+		p.closeVoice(conn)
+		return nil, sent, err, false
+	}
+	delay := time.Second
+	for {
+		p.closeVoice(conn)
+		conn = nil
+		if err := waitForGateway(recovery, shard); err != nil {
+			return nil, sent, fmt.Errorf("reconnect to Discord: %w", err), false
+		}
+		var played time.Duration
+		conn, played, err = p.playTrack(recovery, nil, channel, t, sent, onAudio)
+		sent += played
+		var voiceErr voiceWriteError
+		if resumed || err == nil || !errors.As(err, &voiceErr) {
+			if cause := context.Cause(recovery); cause != nil {
+				err = fmt.Errorf("reconnect to Discord: %w", cause)
+			}
+			return conn, sent, err, resumed
+		}
+		slog.Info("voice rejoin failed", "video", t.id, "retry_in", delay, "error", err)
+		select {
+		case <-recovery.Done():
+		case <-time.After(delay):
+			delay = min(2*delay, 4*time.Second)
+		}
+	}
+}
+
+func waitForGateway(ctx context.Context, shard gateway.Gateway) error {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for shard.Status() != gateway.StatusReady {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+		}
+	}
+	return context.Cause(ctx)
 }
 
 func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, start time.Duration, onResume func()) (voice.Conn, time.Duration, error) {
@@ -409,7 +466,7 @@ func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowfla
 		stop()
 		if err != nil {
 			p.closeVoice(conn)
-			return nil, 0, fmt.Errorf("join voice: %w", err)
+			return nil, 0, voiceWriteError{fmt.Errorf("join voice: %w", err)}
 		}
 	}
 	if result.Title != "" {

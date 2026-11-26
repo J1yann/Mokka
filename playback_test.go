@@ -9,9 +9,11 @@ import (
 	"net"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/godave"
 	"github.com/disgoorg/snowflake/v2"
@@ -159,5 +161,40 @@ func TestLivePlaybackVolume(t *testing.T) {
 	}
 	if low, high := peak(before), peak(rest[len(rest)-len(before):]); low < 1200 || low > 1250 || high < 2800 || high > 2900 {
 		t.Fatalf("unexpected peak levels before and after change: %d, %d", low, high)
+	}
+}
+
+type recoveryGateway struct {
+	gateway.Gateway
+	status atomic.Int32
+}
+
+func (g *recoveryGateway) Status() gateway.Status {
+	return gateway.Status(g.status.Load())
+}
+
+func TestWaitForGatewayRecovery(t *testing.T) {
+	shard := &recoveryGateway{}
+	shard.status.Store(int32(gateway.StatusConnecting))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- waitForGateway(ctx, shard) }()
+	select {
+	case err := <-result:
+		t.Fatalf("recovery continued before the gateway was ready: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	shard.status.Store(int32(gateway.StatusReady))
+	if err := <-result; err != nil {
+		t.Fatalf("ready gateway did not release recovery: %v", err)
+	}
+
+	cancelled, stop := context.WithCancelCause(context.Background())
+	shard.status.Store(int32(gateway.StatusConnecting))
+	go func() { result <- waitForGateway(cancelled, shard) }()
+	stop(errTrackSkipped)
+	if err := <-result; !errors.Is(err, errTrackSkipped) {
+		t.Fatalf("skip did not cancel recovery: %v", err)
 	}
 }
