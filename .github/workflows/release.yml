@@ -81,6 +81,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           name: mokka-linux-amd64
@@ -94,5 +98,16 @@ jobs:
             exit 1
           fi
           sha256sum -c SHA256SUMS
+          notes=$(mktemp)
+          {
+            printf '## What’s changed\n\n'
+            if previous_tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' --exclude "$GITHUB_REF_NAME" HEAD 2>/dev/null); then
+              git log --no-merges --format='- %s (%h)' "$previous_tag..HEAD"
+              printf '\n[Full changelog](%s/%s/compare/%s...%s)\n' \
+                "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$previous_tag" "$GITHUB_REF_NAME"
+            else
+              git log --no-merges --format='- %s (%h)' HEAD
+            fi
+          } > "$notes"
           gh release create "$GITHUB_REF_NAME" mokka-linux-amd64.tar.gz SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
+            --repo "$GITHUB_REPOSITORY" --verify-tag --notes-file "$notes"
