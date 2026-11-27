@@ -1,10 +1,11 @@
-package main
+package player
 
 import (
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"mokka/internal/preferences"
 
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/cache"
@@ -15,7 +16,7 @@ import (
 func TestConcurrentPreferenceChanges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "1.json")
 	channel := snowflake.ID(3)
-	p := &player{
+	p := &Player{
 		guild: 1, channel: channel, preferencesPath: path, volume: 100,
 		client: &bot.Client{Caches: cache.New(cache.WithCaches(cache.FlagVoiceStates))},
 	}
@@ -34,8 +35,8 @@ func TestConcurrentPreferenceChanges(t *testing.T) {
 	})
 	changes.Wait()
 
-	want := preferences{Autoplay: true, Volume: 70}
-	if got, err := loadPreferences(path); err != nil || got != want {
+	want := preferences.Settings{Autoplay: true, Volume: 70}
+	if got, err := preferences.Load(path); err != nil || got != want {
 		t.Fatalf("reloaded preferences: %+v, %v", got, err)
 	}
 	// A regular file cannot be used as the parent of a new preferences file.
@@ -47,27 +48,7 @@ func TestConcurrentPreferenceChanges(t *testing.T) {
 	if p.volume != want.Volume || len(p.volumeUpdates) != 0 {
 		t.Fatal("failed save changed playback volume")
 	}
-	if got, err := loadPreferences(path); err != nil || got != want {
+	if got, err := preferences.Load(path); err != nil || got != want {
 		t.Fatalf("preferences after failed save: %+v, %v", got, err)
-	}
-}
-
-func TestLoadPreferencesValidation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "1.json")
-	defaults := preferences{Volume: 100}
-	if got, err := loadPreferences(path); err != nil || got != defaults {
-		t.Fatalf("missing preferences: %+v, %v", got, err)
-	}
-	for _, data := range []string{
-		`{"autoplay":false,"autoplay":true,"volume":70}`,
-		`{"autoplay":true,"volume":101}`,
-		`{"autoplay":true,"volume":null}`,
-	} {
-		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if got, err := loadPreferences(path); err == nil || got != defaults {
-			t.Errorf("invalid preferences %q: %+v, %v", data, got, err)
-		}
 	}
 }

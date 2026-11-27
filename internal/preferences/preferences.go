@@ -1,4 +1,4 @@
-package main
+package preferences
 
 import (
 	"encoding/json/v2"
@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 )
 
-type preferences struct {
+type Settings struct {
 	Autoplay bool `json:"autoplay"`
 	Volume   int  `json:"volume"`
 }
 
-func loadPreferences(path string) (preferences, error) {
-	defaults := preferences{Volume: 100}
+func Load(path string) (Settings, error) {
+	defaults := Settings{Volume: 100}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return defaults, nil
@@ -32,10 +32,10 @@ func loadPreferences(path string) (preferences, error) {
 	if stored == nil || stored.Autoplay == nil || stored.Volume == nil || *stored.Volume < 0 || *stored.Volume > 100 {
 		return defaults, errors.New("preferences require autoplay and a volume from 0 to 100")
 	}
-	return preferences{Autoplay: *stored.Autoplay, Volume: *stored.Volume}, nil
+	return Settings{Autoplay: *stored.Autoplay, Volume: *stored.Volume}, nil
 }
 
-func savePreferences(path string, settings preferences) error {
+func Save(path string, settings Settings) error {
 	if path == "" {
 		return errors.New("preference writes are disabled")
 	}
@@ -75,13 +75,4 @@ func savePreferences(path string, settings preferences) error {
 		slog.Warn("couldn't sync preferences directory", "error", err)
 	}
 	return nil
-}
-
-// savePreferenceChange runs with the player's mutex held.
-func (p *player) savePreferenceChange(settings preferences) bool {
-	if err := savePreferences(p.preferencesPath, settings); err != nil {
-		slog.Warn("couldn't save preferences", "guild", p.guild, "error", err)
-		return false
-	}
-	return true
 }

@@ -1,4 +1,4 @@
-package main
+package player
 
 import (
 	"context"
@@ -16,7 +16,7 @@ type managedVoiceConn struct {
 	closed bool
 }
 
-func newManagedVoiceConn(guild, user snowflake.ID, update voice.StateUpdateFunc, remove func(), opts ...voice.ConnConfigOpt) voice.Conn {
+func NewManagedVoiceConn(guild, user snowflake.ID, update voice.StateUpdateFunc, remove func(), opts ...voice.ConnConfigOpt) voice.Conn {
 	conn := &managedVoiceConn{update: update}
 	conn.Conn = voice.NewConn(guild, user, conn.updateWhileOpen, remove, opts...)
 	return conn

@@ -1,4 +1,4 @@
-package main
+package player
 
 import (
 	"slices"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestQueuePositions(t *testing.T) {
-	p := &player{queue: []track{{id: "a"}, {id: "b"}, {id: "c"}}}
+	p := &Player{queue: []track{{id: "a"}, {id: "b"}, {id: "c"}}}
 	p.reorderQueue("move", []string{"1", "3"})
 	p.reorderQueue("remove", []string{"2"})
 	got := []string{p.queue[0].id, p.queue[1].id}

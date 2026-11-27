@@ -1,4 +1,4 @@
-package main
+package player
 
 import (
 	"bytes"
@@ -80,7 +80,7 @@ func TestVoiceDisconnectKeepsLastSentPosition(t *testing.T) {
 
 func TestClosedVoiceSessionCannotDisconnectItsReplacement(t *testing.T) {
 	var updates int
-	conn := newManagedVoiceConn(42, 43, func(context.Context, snowflake.ID, *snowflake.ID, bool, bool) error {
+	conn := NewManagedVoiceConn(42, 43, func(context.Context, snowflake.ID, *snowflake.ID, bool, bool) error {
 		updates++
 		return nil
 	}, func() {}).(*managedVoiceConn)

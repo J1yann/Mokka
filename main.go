@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
@@ -25,9 +24,10 @@ import (
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/thomas-vilte/dave-go/session"
-)
 
-var noMentions = &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}}
+	"mokka/internal/config"
+	"mokka/internal/player"
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -37,19 +37,19 @@ func main() {
 }
 
 func run() error {
-	cfg, err := loadConfig("mokka.conf")
+	cfg, err := config.Load("mokka.conf")
 	if err != nil {
 		return err
 	}
-	token := cfg.value("DISCORD_TOKEN")
+	token := cfg.Value("DISCORD_TOKEN")
 	if token == "" {
 		return errors.New("set DISCORD_TOKEN in mokka.conf or the environment")
 	}
-	guilds, err := configuredGuilds(cfg.value("MOKKA_GUILD_IDS"), cfg.value("MOKKA_GUILD_ID"))
+	guilds, err := config.Guilds(cfg.Value("MOKKA_GUILD_IDS"), cfg.Value("MOKKA_GUILD_ID"))
 	if err != nil {
 		return err
 	}
-	extractor := cfg.value("MOKKA_EXTRACTOR")
+	extractor := cfg.Value("MOKKA_EXTRACTOR")
 	if extractor == "" {
 		extractor = "mokka-extractor"
 	}
@@ -63,11 +63,11 @@ func run() error {
 	if output, err := exec.Command("ffmpeg", "-hide_banner", "-h", "filter=azmq").Output(); err != nil || !strings.HasPrefix(string(output), "Filter azmq") {
 		return errors.New("FFmpeg must include the azmq filter (libzmq). On Debian or Ubuntu, run `sudo apt update && sudo apt install ffmpeg` and make sure the packaged ffmpeg is first on PATH")
 	}
-	opusBitrate, err := configuredOpusBitrate(cfg.value("MOKKA_OPUS_BITRATE_KBPS"))
+	opusBitrate, err := config.OpusBitrate(cfg.Value("MOKKA_OPUS_BITRATE_KBPS"))
 	if err != nil {
 		return err
 	}
-	mediaProxy := cfg.value("MOKKA_MEDIA_PROXY")
+	mediaProxy := cfg.Value("MOKKA_MEDIA_PROXY")
 	if mediaProxy != "" {
 		u, err := url.Parse(mediaProxy)
 		if err != nil || u.Scheme != "http" || u.Hostname() == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
@@ -75,38 +75,26 @@ func run() error {
 		}
 	}
 	idleTimeout := time.Hour
-	if value := cfg.value("MOKKA_IDLE_TIMEOUT"); value != "" {
+	if value := cfg.Value("MOKKA_IDLE_TIMEOUT"); value != "" {
 		idleTimeout, err = time.ParseDuration(value)
 		if err != nil || (idleTimeout != 0 && idleTimeout < time.Second) {
 			return errors.New("MOKKA_IDLE_TIMEOUT must be at least 1s, or 0 to disable")
 		}
 	}
 
-	prefix, err := configuredPrefix(cfg.value("MOKKA_PREFIX"))
+	prefix, err := config.Prefix(cfg.Value("MOKKA_PREFIX"))
 	if err != nil {
 		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	stateDir := cfg.value("MOKKA_STATE_DIR")
+	stateDir := cfg.Value("MOKKA_STATE_DIR")
 	if stateDir == "" {
 		stateDir = "mokka-state"
 	}
-	players := make(map[snowflake.ID]*player, len(guilds))
-	playbackSlots := make(chan struct{}, 3)
-	for _, guild := range guilds {
-		path := filepath.Join(stateDir, guild.String()+".json")
-		settings, err := loadPreferences(path)
-		if err != nil {
-			slog.Warn("couldn't load preferences; saving disabled for this server", "guild", guild, "error", err)
-			path = ""
-		}
-		players[guild] = &player{ctx: ctx, guild: guild, prefix: prefix, extractor: extractor, mediaProxy: mediaProxy,
-			searchSlot: make(chan struct{}, 1), playbackSlots: playbackSlots, responses: make(map[snowflake.ID]responseCard),
-			preferencesPath: path, autoplay: settings.Autoplay, volume: settings.Volume, idleTimeout: idleTimeout, opusBitrate: opusBitrate, wake: make(chan struct{}, 1)}
-	}
-	findPlayer := func(guild *snowflake.ID) *player {
+	players := make(map[snowflake.ID]*player.Player, len(guilds))
+	findPlayer := func(guild *snowflake.ID) *player.Player {
 		if guild == nil {
 			return nil
 		}
@@ -119,7 +107,7 @@ func run() error {
 		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagVoiceStates)),
 		bot.WithVoiceManagerConfigOpts(
 			voice.WithDaveSessionCreateFunc(session.CreateFunc()),
-			voice.WithConnCreateFunc(newManagedVoiceConn),
+			voice.WithConnCreateFunc(player.NewManagedVoiceConn),
 		),
 		bot.WithEventListenerFunc(func(e *events.GuildJoin) {
 			if players[e.GuildID] != nil {
@@ -131,7 +119,7 @@ func run() error {
 			if p == nil || e.Message.Author.Bot {
 				return
 			}
-			name, query := parsePrefixCommand(e.Message.Content, p.prefix)
+			name, query := parsePrefixCommand(e.Message.Content, prefix)
 			switch name {
 			case "play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "autoplay", "volume", "detail", "info":
 			default:
@@ -142,8 +130,8 @@ func run() error {
 			case slots <- struct{}{}:
 				go func() {
 					defer func() { <-slots }()
-					message, text := p.command(name, strings.TrimSpace(query), e.Message.Author.ID, e.ChannelID)
-					sendCard(ctx, e.Client(), e.ChannelID, commandCard(name, message, text))
+					message, text := p.Command(name, strings.TrimSpace(query), e.Message.Author.ID, e.ChannelID)
+					player.SendCard(ctx, e.Client(), e.ChannelID, player.CommandCard(name, message, text))
 				}()
 			default:
 			}
@@ -176,15 +164,15 @@ func run() error {
 						query, _ = data.OptString("mode")
 					}
 					slog.Info("slash command received", "command", data.CommandName(), "channel", e.Channel().ID())
-					message, text := p.command(data.CommandName(), strings.TrimSpace(query), e.User().ID, e.Channel().ID())
-					err := updateCard(e.Client(), e.ApplicationID(), e.Token(), commandCard(data.CommandName(), message, text))
+					message, text := p.Command(data.CommandName(), strings.TrimSpace(query), e.User().ID, e.Channel().ID())
+					err := player.UpdateCard(e.Client(), e.ApplicationID(), e.Token(), player.CommandCard(data.CommandName(), message, text))
 					if err != nil {
 						slog.Warn("couldn't update command response", "command", data.CommandName())
 					}
 				}()
 			default:
 				go func() {
-					_ = e.CreateMessage(card("Playback", "Mokka is busy. Try again shortly.", ""))
+					_ = e.CreateMessage(player.BusyCard())
 				}()
 			}
 		}),
@@ -215,8 +203,8 @@ func run() error {
 						slog.Warn("couldn't acknowledge playback button", "command", name)
 						return
 					}
-					msg := p.playbackCard(name, cardID, e.User().ID)
-					if err := p.showButtonResponse(e.Channel().ID(), e.ID(), msg); err != nil {
+					msg := p.PlaybackCard(name, cardID, e.User().ID)
+					if err := p.ShowButtonResponse(e.Channel().ID(), e.ID(), msg); err != nil {
 						slog.Warn("couldn't update playback button response", "command", name)
 					}
 				}()
@@ -228,8 +216,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	for _, p := range players {
-		p.client = client
+	options := player.Options{
+		Prefix: prefix, Extractor: extractor, MediaProxy: mediaProxy,
+		IdleTimeout: idleTimeout, OpusBitrate: opusBitrate, PlaybackSlots: make(chan struct{}, 3),
+	}
+	for _, guild := range guilds {
+		path := filepath.Join(stateDir, guild.String()+".json")
+		players[guild] = player.New(ctx, client, guild, path, options)
 	}
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -255,10 +248,7 @@ func run() error {
 	shutdown, cancelShutdown := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancelShutdown()
 	for _, p := range players {
-		p.mu.Lock()
-		done := p.done
-		p.mu.Unlock()
-		if done != nil {
+		if done := p.Done(); done != nil {
 			select {
 			case <-done:
 			case <-shutdown.Done():
@@ -272,42 +262,8 @@ func run() error {
 func registerGuildCommands(ctx context.Context, client *bot.Client, guild snowflake.ID) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if _, err := client.Rest.SetGuildCommands(client.ApplicationID, guild, slashCommands(), rest.WithCtx(ctx)); err != nil && ctx.Err() == nil {
+	if _, err := client.Rest.SetGuildCommands(client.ApplicationID, guild, player.SlashCommands(), rest.WithCtx(ctx)); err != nil && ctx.Err() == nil {
 		slog.Warn("couldn't register slash commands", "guild", guild, "error", err)
-	}
-}
-
-func slashCommands() []discord.ApplicationCommandCreate {
-	return []discord.ApplicationCommandCreate{
-		discord.SlashCommandCreate{Name: "play", Description: "Play a title or YouTube link",
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionString{Name: "query", Description: "Song title or YouTube link", Required: true}}},
-		discord.SlashCommandCreate{Name: "lyrics", Description: "Find lyrics for a title or the current song",
-			Options: []discord.ApplicationCommandOption{
-				discord.ApplicationCommandOptionString{Name: "query", Description: "Song title and optional artist"}}},
-		discord.SlashCommandCreate{Name: "queue", Description: "Show the music queue"},
-		discord.SlashCommandCreate{Name: "info", Description: "About Mokka"},
-		discord.SlashCommandCreate{Name: "help", Description: "Show Mokka’s commands"},
-		discord.SlashCommandCreate{Name: "skip", Description: "Skip the current track"},
-		discord.SlashCommandCreate{Name: "stop", Description: "Stop playback and clear the queue"},
-		discord.SlashCommandCreate{Name: "remove", Description: "Remove a waiting track", Options: []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionInt{Name: "position", Description: "Position in the queue", Required: true},
-		}},
-		discord.SlashCommandCreate{Name: "move", Description: "Move a waiting track", Options: []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionInt{Name: "from", Description: "Current position", Required: true},
-			discord.ApplicationCommandOptionInt{Name: "to", Description: "New position", Required: true},
-		}},
-		discord.SlashCommandCreate{Name: "detail", Description: "Show playback settings and queue status"},
-		discord.SlashCommandCreate{Name: "volume", Description: "Show or set playback volume", Options: []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionInt{Name: "level", Description: "Volume from 0 to 100 percent"},
-		}},
-		discord.SlashCommandCreate{Name: "shuffle", Description: "Shuffle the waiting tracks"},
-		discord.SlashCommandCreate{Name: "repeat", Description: "Set repeat one or toggle it", Options: []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionString{Name: "mode", Description: "On or off"},
-		}},
-		discord.SlashCommandCreate{Name: "autoplay", Description: "Play a recommendation when the queue ends", Options: []discord.ApplicationCommandOption{
-			discord.ApplicationCommandOptionString{Name: "mode", Description: "On or off"},
-		}},
 	}
 }
 
@@ -327,43 +283,4 @@ func parsePrefixCommand(content, prefix string) (string, string) {
 		name = "volume"
 	}
 	return name, query
-}
-
-func (p *player) command(name, query string, user, channel snowflake.ID) (string, string) {
-	if !p.inVoice(user) {
-		return joinVoiceMessage, ""
-	}
-	switch name {
-	case "info":
-		return "Thanks for listening with Mokka. Hope you come across a song you’ll want to play again.\n\nMade with ❤️ by [J1yann](https://github.com/J1yann)\n\nUse `/help` to see Mokka’s commands.", ""
-	case "help":
-		var lines []string
-		for _, command := range slashCommands() {
-			if slash, ok := command.(discord.SlashCommandCreate); ok {
-				lines = append(lines, "`/"+slash.Name+"` "+slash.Description)
-			}
-		}
-		lines = append(lines, "", fmt.Sprintf("Use `%[1]sp` for `%[1]splay` and `%[1]sv` for `%[1]svolume`.", p.prefix))
-		return strings.Join(lines, "\n"), ""
-	case "detail":
-		return p.playbackDetails(), ""
-	case "play":
-		return p.enqueue(user, channel, query), ""
-	case "lyrics":
-		return p.lookupLyrics(query, "")
-	case "queue", "skip", "stop":
-		return p.controls(name, user, ""), ""
-	case "remove", "move", "shuffle", "repeat", "autoplay", "volume":
-		return p.editQueue(name, query, user), ""
-	default:
-		return "Unknown command.", ""
-	}
-}
-
-func label(text string) string {
-	text = strings.Join(strings.Fields(text), " ")
-	if chars := []rune(text); len(chars) > 72 {
-		return string(chars[:72]) + "…"
-	}
-	return text
 }

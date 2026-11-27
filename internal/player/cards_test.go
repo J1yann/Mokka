@@ -1,4 +1,4 @@
-package main
+package player
 
 import (
 	"context"
@@ -23,36 +23,36 @@ func TestNowPlayingButtonsUseTrackID(t *testing.T) {
 		}
 	}
 	canceled := false
-	p := &player{current: track{cardID: "new-track"}, cancel: func(error) { canceled = true }}
+	p := &Player{current: track{cardID: "new-track"}, cancel: func(error) { canceled = true }}
 	if got := p.controls("skip", 0, "this-track"); got != "This track has ended. Use the current playback card." || canceled {
 		t.Fatalf("old button affected the current track: %q, canceled=%t", got, canceled)
 	}
 }
 
 func TestCommandRequiresVoice(t *testing.T) {
-	p := &player{
+	p := &Player{
 		guild:  1,
 		client: &bot.Client{Caches: cache.New(cache.WithCaches(cache.FlagVoiceStates))},
 	}
 	const user snowflake.ID = 2
 	for _, name := range []string{"play", "lyrics", "queue", "skip", "stop", "remove", "move", "shuffle", "repeat", "autoplay", "volume", "detail", "info", "help"} {
-		if message, _ := p.command(name, "", user, 3); message != joinVoiceMessage {
+		if message, _ := p.Command(name, "", user, 3); message != joinVoiceMessage {
 			t.Errorf("%s outside voice: got %q", name, message)
 		}
 	}
 	channel := snowflake.ID(4)
 	p.client.Caches.AddVoiceState(discord.VoiceState{GuildID: p.guild, UserID: user, ChannelID: &channel})
-	help, _ := p.command("help", "", user, 3)
-	for _, command := range slashCommands() {
+	help, _ := p.Command("help", "", user, 3)
+	for _, command := range SlashCommands() {
 		if !strings.Contains(help, "`/"+command.CommandName()+"`") {
 			t.Errorf("help is missing /%s", command.CommandName())
 		}
 	}
 	p.autoplay, p.volume = true, 70
-	if message, _ := p.command("detail", "", user, 3); !strings.Contains(message, "**Autoplay:** On") || !strings.Contains(message, "**Volume:** 70%") {
+	if message, _ := p.Command("detail", "", user, 3); !strings.Contains(message, "**Autoplay:** On") || !strings.Contains(message, "**Volume:** 70%") {
 		t.Fatalf("details in voice: got %q", message)
 	}
-	if message, _ := p.command("queue", "", user, 3); message != "The queue is empty." {
+	if message, _ := p.Command("queue", "", user, 3); message != "The queue is empty." {
 		t.Fatalf("queue in voice: got %q", message)
 	}
 }
@@ -63,7 +63,7 @@ func TestEmptyVoicePausesAndWaitsForListener(t *testing.T) {
 	audioCtx, pause := context.WithCancelCause(ctx)
 	defer pause(nil)
 	const channel snowflake.ID = 4
-	p := &player{
+	p := &Player{
 		client: &bot.Client{Caches: cache.New(cache.WithCaches(cache.FlagVoiceStates))},
 		guild:  1, channel: channel, pauseAudio: pause,
 	}
@@ -90,7 +90,7 @@ func TestSkipBypassesRepeatAndStopCancelsLookup(t *testing.T) {
 	playCtx, cancelPlay := context.WithCancelCause(context.Background())
 	defer cancelPlay(nil)
 	channel := snowflake.ID(4)
-	p := &player{
+	p := &Player{
 		client: &bot.Client{Caches: cache.New(cache.WithCaches(cache.FlagVoiceStates))},
 		guild:  1, channel: channel, autoplay: true, repeat: true,
 		current: track{id: "song", media: media{Title: "Song"}}, cancel: cancelPlay,

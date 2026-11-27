@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"bufio"
@@ -11,11 +11,11 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 )
 
-type config map[string]string
+type Config map[string]string
 
 const defaultPrefix = "m!"
 
-func configuredPrefix(raw string) (string, error) {
+func Prefix(raw string) (string, error) {
 	prefix := strings.TrimSpace(raw)
 	if prefix == "" {
 		return defaultPrefix, nil
@@ -28,7 +28,7 @@ func configuredPrefix(raw string) (string, error) {
 	return prefix, nil
 }
 
-func configuredOpusBitrate(raw string) (int, error) {
+func OpusBitrate(raw string) (int, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 96, nil
@@ -40,8 +40,8 @@ func configuredOpusBitrate(raw string) (int, error) {
 	return bitrate, nil
 }
 
-func loadConfig(path string) (config, error) {
-	cfg := make(config)
+func Load(path string) (Config, error) {
+	cfg := make(Config)
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return cfg, nil
@@ -66,14 +66,14 @@ func loadConfig(path string) (config, error) {
 	return cfg, scanner.Err()
 }
 
-func (cfg config) value(key string) string {
+func (cfg Config) Value(key string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
 	}
 	return cfg[key]
 }
 
-func configuredGuilds(plural, single string) ([]snowflake.ID, error) {
+func Guilds(plural, single string) ([]snowflake.ID, error) {
 	if strings.TrimSpace(plural) == "" {
 		plural = single
 	}

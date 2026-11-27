@@ -1,4 +1,4 @@
-package main
+package player
 
 import (
 	"fmt"
@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/disgoorg/snowflake/v2"
+
+	"mokka/internal/preferences"
 )
 
 const preferenceSaveMessage = "Mokka couldn’t save that setting. Your previous setting is still active."
 
-func (p *player) editQueue(name, input string, user snowflake.ID) string {
+func (p *Player) editQueue(name, input string, user snowflake.ID) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.channel == 0 || p.leaving {
@@ -29,7 +31,7 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 				return "Use a volume from 0 to 100."
 			}
 			if p.volume != level {
-				if !p.savePreferenceChange(preferences{Autoplay: p.autoplay, Volume: level}) {
+				if !p.savePreferenceChange(preferences.Settings{Autoplay: p.autoplay, Volume: level}) {
 					return preferenceSaveMessage
 				}
 				p.volume = level
@@ -73,7 +75,7 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 		default:
 			return "Use `" + p.prefix + name + " on` or `" + p.prefix + name + " off`."
 		}
-		if name == "autoplay" && next != p.autoplay && !p.savePreferenceChange(preferences{Autoplay: next, Volume: p.volume}) {
+		if name == "autoplay" && next != p.autoplay && !p.savePreferenceChange(preferences.Settings{Autoplay: next, Volume: p.volume}) {
 			return preferenceSaveMessage
 		}
 		*setting = next
@@ -87,7 +89,7 @@ func (p *player) editQueue(name, input string, user snowflake.ID) string {
 }
 
 // reorderQueue runs with p.mu held. Positions refer to waiting tracks only.
-func (p *player) reorderQueue(name string, args []string) string {
+func (p *Player) reorderQueue(name string, args []string) string {
 	want := 1
 	usage := "Use `" + p.prefix + "remove <position>`."
 	if name == "move" {
@@ -119,7 +121,7 @@ func (p *player) reorderQueue(name string, args []string) string {
 	return fmt.Sprintf("Moved %s to position %d.", title, to+1)
 }
 
-func (p *player) playbackDetails() string {
+func (p *Player) playbackDetails() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	onOff := func(enabled bool) string {

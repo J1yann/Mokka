@@ -1,4 +1,4 @@
-package main
+package player
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 const youtubeWebVersion = "2.20260120.01.00"
 const autoplayBatchSize = 5
 
-func (p *player) nextTracks(ctx context.Context, current track, recent []track) ([]track, error) {
+func (p *Player) nextTracks(ctx context.Context, current track, recent []track) ([]track, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	body := fmt.Sprintf(`{"context":{"client":{"clientName":"WEB","clientVersion":%q,"hl":"en","gl":"US"}},"videoId":%q}`, youtubeWebVersion, current.id)

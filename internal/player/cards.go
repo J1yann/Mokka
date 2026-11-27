@@ -1,4 +1,4 @@
-package main
+package player
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 )
+
+var noMentions = &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}}
 
 const cardAccent = 0xc1845b
 
@@ -38,7 +40,7 @@ func card(title, message, lyrics string) discord.MessageCreate {
 	}
 }
 
-func commandCard(name, message, lyrics string) discord.MessageCreate {
+func CommandCard(name, message, lyrics string) discord.MessageCreate {
 	title := "Playback"
 	switch name {
 	case "info":
@@ -77,7 +79,7 @@ func nowPlayingCard(t track) discord.MessageCreate {
 	return msg
 }
 
-func updateCard(client *bot.Client, app snowflake.ID, token string, msg discord.MessageCreate) error {
+func UpdateCard(client *bot.Client, app snowflake.ID, token string, msg discord.MessageCreate) error {
 	_, err := client.Rest.UpdateInteractionResponse(app, token, cardUpdate(msg))
 	return err
 }
@@ -94,7 +96,7 @@ type responseCard struct {
 	interactionID snowflake.ID
 }
 
-func (p *player) showButtonResponse(channel, interaction snowflake.ID, msg discord.MessageCreate) error {
+func (p *Player) ShowButtonResponse(channel, interaction snowflake.ID, msg discord.MessageCreate) error {
 	p.responseMu.Lock()
 	defer p.responseMu.Unlock()
 	entry := p.responses[channel]
@@ -113,7 +115,7 @@ func (p *player) showButtonResponse(channel, interaction snowflake.ID, msg disco
 	return p.writeResponseCard(channel, entry, msg, moveToBottom)
 }
 
-func (p *player) showPlaybackFinished(channel snowflake.ID, noRecommendation bool) {
+func (p *Player) showPlaybackFinished(channel snowflake.ID, noRecommendation bool) {
 	p.responseMu.Lock()
 	defer p.responseMu.Unlock()
 	p.mu.Lock()
@@ -132,7 +134,7 @@ func (p *player) showPlaybackFinished(channel snowflake.ID, noRecommendation boo
 	}
 }
 
-func (p *player) showPlaybackInterrupted(channel snowflake.ID, title string) {
+func (p *Player) showPlaybackInterrupted(channel snowflake.ID, title string) {
 	p.responseMu.Lock()
 	defer p.responseMu.Unlock()
 	msg := card("Playback interrupted", "Couldn't resume "+title+". You can queue it again.", "")
@@ -142,7 +144,7 @@ func (p *player) showPlaybackInterrupted(channel snowflake.ID, title string) {
 }
 
 // writeResponseCard runs with responseMu held.
-func (p *player) writeResponseCard(channel snowflake.ID, entry responseCard, msg discord.MessageCreate, moveToBottom bool) error {
+func (p *Player) writeResponseCard(channel snowflake.ID, entry responseCard, msg discord.MessageCreate, moveToBottom bool) error {
 	ctx, cancel := context.WithTimeout(p.ctx, 5*time.Second)
 	defer cancel()
 	if entry.messageID != 0 && !moveToBottom {
@@ -173,13 +175,13 @@ func (p *player) writeResponseCard(channel snowflake.ID, entry responseCard, msg
 	return nil
 }
 
-func sendCard(ctx context.Context, client *bot.Client, channel snowflake.ID, msg discord.MessageCreate) {
+func SendCard(ctx context.Context, client *bot.Client, channel snowflake.ID, msg discord.MessageCreate) {
 	if _, err := client.Rest.CreateMessage(channel, msg, rest.WithCtx(ctx)); err != nil && ctx.Err() == nil {
 		slog.Warn("couldn't send channel card", "channel", channel, "error", err)
 	}
 }
 
-func (p *player) showReconnect(ctx context.Context, channel snowflake.ID, result <-chan string) {
+func (p *Player) showReconnect(ctx context.Context, channel snowflake.ID, result <-chan string) {
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
 	select {
@@ -201,4 +203,8 @@ func (p *player) showReconnect(ctx context.Context, channel snowflake.ID, result
 	if _, err := p.client.Rest.UpdateMessage(channel, msg.ID, cardUpdate(card("Playback", message, "")), rest.WithCtx(requestCtx)); err != nil && requestCtx.Err() == nil {
 		slog.Warn("couldn't update reconnect notice", "channel", channel, "error", err)
 	}
+}
+
+func BusyCard() discord.MessageCreate {
+	return card("Playback", "Mokka is busy. Try again shortly.", "")
 }

@@ -1,4 +1,4 @@
-package main
+package player
 
 import (
 	"context"
@@ -16,6 +16,8 @@ import (
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
+
+	"mokka/internal/preferences"
 )
 
 type track struct {
@@ -32,7 +34,7 @@ var (
 	errTrackSkipped = errors.New("track skipped")
 )
 
-type player struct {
+type Player struct {
 	ctx             context.Context
 	client          *bot.Client
 	guild           snowflake.ID
@@ -72,12 +74,12 @@ const (
 	joinMokkaVoiceMessage = "Join Mokka’s voice channel and try again."
 )
 
-func (p *player) inVoice(user snowflake.ID) bool {
+func (p *Player) inVoice(user snowflake.ID) bool {
 	state, ok := p.client.Caches.VoiceState(p.guild, user)
 	return ok && state.ChannelID != nil
 }
 
-func (p *player) enqueue(user, textChannel snowflake.ID, query string) string {
+func (p *Player) enqueue(user, textChannel snowflake.ID, query string) string {
 	if query == "" {
 		return "Enter a song title or YouTube link."
 	}
@@ -141,14 +143,14 @@ func (p *player) enqueue(user, textChannel snowflake.ID, query string) string {
 	return fmt.Sprintf("Added **%s** to the queue at position %d.", title, len(p.queue))
 }
 
-func (p *player) wakeWorker() {
+func (p *Player) wakeWorker() {
 	select {
 	case p.wake <- struct{}{}:
 	default:
 	}
 }
 
-func (p *player) run() {
+func (p *Player) run() {
 	watch, stopWatch := context.WithCancel(p.ctx)
 	defer stopWatch()
 	go p.watchVoice(watch)
@@ -273,11 +275,11 @@ func (p *player) run() {
 }
 
 // canAutoplay runs with the player's mutex held.
-func (p *player) canAutoplay(skipped bool) bool {
+func (p *Player) canAutoplay(skipped bool) bool {
 	return p.autoplay && (skipped || !p.repeat) && len(p.queue) == 0 && p.hasListener(p.channel)
 }
 
-func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track) (voice.Conn, time.Duration, error) {
+func (p *Player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track) (voice.Conn, time.Duration, error) {
 	var sent time.Duration
 	var pauseNotice chan struct{}
 	onResume := func() {
@@ -324,7 +326,7 @@ func (p *player) playQueuedTrack(ctx context.Context, conn voice.Conn, channel s
 	}
 }
 
-func (p *player) waitForListener(ctx context.Context, channel snowflake.ID) error {
+func (p *Player) waitForListener(ctx context.Context, channel snowflake.ID) error {
 	if p.hasListener(channel) {
 		return ctx.Err()
 	}
@@ -340,7 +342,7 @@ func (p *player) waitForListener(ctx context.Context, channel snowflake.ID) erro
 	return ctx.Err()
 }
 
-func (p *player) playWhileListening(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, sent time.Duration, onResume func()) (voice.Conn, time.Duration, error) {
+func (p *Player) playWhileListening(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, sent time.Duration, onResume func()) (voice.Conn, time.Duration, error) {
 	select {
 	case p.playbackSlots <- struct{}{}:
 	default:
@@ -388,7 +390,7 @@ func (p *player) playWhileListening(ctx context.Context, conn voice.Conn, channe
 	return conn, sent, err
 }
 
-func (p *player) recoverVoicePlayback(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, sent time.Duration, onResume func()) (voice.Conn, time.Duration, error, bool) {
+func (p *Player) recoverVoicePlayback(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, sent time.Duration, onResume func()) (voice.Conn, time.Duration, error, bool) {
 	recovery, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	timer := time.AfterFunc(30*time.Second, func() { cancel(context.DeadlineExceeded) })
@@ -459,7 +461,7 @@ func waitForGateway(ctx context.Context, shard gateway.Gateway) error {
 	return context.Cause(ctx)
 }
 
-func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, start time.Duration, onResume func()) (voice.Conn, time.Duration, error) {
+func (p *Player) playTrack(ctx context.Context, conn voice.Conn, channel snowflake.ID, t track, start time.Duration, onResume func()) (voice.Conn, time.Duration, error) {
 	result, err := extract(ctx, p.extractor, p.mediaProxy, "resolve", t.id)
 	if err != nil {
 		return conn, 0, fmt.Errorf("resolve audio: %w", err)
@@ -505,7 +507,7 @@ func (p *player) playTrack(ctx context.Context, conn voice.Conn, channel snowfla
 	return conn, played, err
 }
 
-func (p *player) waitIdle() {
+func (p *Player) waitIdle() {
 	if p.idleTimeout == 0 {
 		select {
 		case <-p.ctx.Done():
@@ -528,7 +530,7 @@ func (p *player) waitIdle() {
 	}
 }
 
-func (p *player) watchVoice(ctx context.Context) {
+func (p *Player) watchVoice(ctx context.Context) {
 	interval := time.Second
 	if p.idleTimeout > 0 {
 		interval = min(p.idleTimeout, interval)
@@ -566,7 +568,7 @@ func (p *player) watchVoice(ctx context.Context) {
 	}
 }
 
-func (p *player) hasListener(channel snowflake.ID) bool {
+func (p *Player) hasListener(channel snowflake.ID) bool {
 	for state := range p.client.Caches.VoiceStates(p.guild) {
 		if state.UserID != p.client.ID() && state.ChannelID != nil && *state.ChannelID == channel {
 			return true
@@ -575,7 +577,7 @@ func (p *player) hasListener(channel snowflake.ID) bool {
 	return false
 }
 
-func (p *player) leaveLocked() {
+func (p *Player) leaveLocked() {
 	p.leaving = true
 	p.generation++
 	p.queue = nil
@@ -586,7 +588,7 @@ func (p *player) leaveLocked() {
 	p.wakeWorker()
 }
 
-func (p *player) closeVoice(conn voice.Conn) {
+func (p *Player) closeVoice(conn voice.Conn) {
 	if conn != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
@@ -594,13 +596,13 @@ func (p *player) closeVoice(conn voice.Conn) {
 	}
 }
 
-func (p *player) notify(t track, message discord.MessageCreate) {
+func (p *Player) notify(t track, message discord.MessageCreate) {
 	ctx, cancel := context.WithTimeout(p.ctx, 3*time.Second)
 	defer cancel()
-	sendCard(ctx, p.client, t.textChannel, message)
+	SendCard(ctx, p.client, t.textChannel, message)
 }
 
-func (p *player) controls(command string, user snowflake.ID, cardID string) string {
+func (p *Player) controls(command string, user snowflake.ID, cardID string) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if command == "queue" {
@@ -652,9 +654,9 @@ func (p *player) controls(command string, user snowflake.ID, cardID string) stri
 	return "Stopped playback and cleared the queue."
 }
 
-func (p *player) playbackCard(name, cardID string, user snowflake.ID) discord.MessageCreate {
+func (p *Player) PlaybackCard(name, cardID string, user snowflake.ID) discord.MessageCreate {
 	if !p.inVoice(user) {
-		return commandCard(name, joinVoiceMessage, "")
+		return CommandCard(name, joinVoiceMessage, "")
 	}
 	p.mu.Lock()
 	t := p.current
@@ -668,10 +670,10 @@ func (p *player) playbackCard(name, cardID string, user snowflake.ID) discord.Me
 	} else {
 		message = p.controls(name, user, cardID)
 	}
-	return commandCard(name, message, lyrics)
+	return CommandCard(name, message, lyrics)
 }
 
-func (p *player) lookupLyrics(query, cardID string) (string, string) {
+func (p *Player) lookupLyrics(query, cardID string) (string, string) {
 	var title, artist string
 	if query == "" {
 		p.mu.Lock()
@@ -712,4 +714,40 @@ func (p *player) lookupLyrics(query, cardID string) (string, string) {
 	default:
 		return "Lyrics for " + escapeCardText(label(result.Artist+" · "+result.Title)), result.Text
 	}
+}
+
+// savePreferenceChange runs with the player's mutex held.
+func (p *Player) savePreferenceChange(settings preferences.Settings) bool {
+	if err := preferences.Save(p.preferencesPath, settings); err != nil {
+		slog.Warn("couldn't save preferences", "guild", p.guild, "error", err)
+		return false
+	}
+	return true
+}
+
+type Options struct {
+	Prefix, Extractor, MediaProxy string
+	IdleTimeout                   time.Duration
+	OpusBitrate                   int
+	PlaybackSlots                 chan struct{}
+}
+
+func New(ctx context.Context, client *bot.Client, guild snowflake.ID, path string, options Options) *Player {
+	settings, err := preferences.Load(path)
+	if err != nil {
+		slog.Warn("couldn't load preferences; saving disabled for this server", "guild", guild, "error", err)
+		path = ""
+	}
+	return &Player{ctx: ctx, client: client, guild: guild, prefix: options.Prefix,
+		extractor: options.Extractor, mediaProxy: options.MediaProxy,
+		searchSlot: make(chan struct{}, 1), playbackSlots: options.PlaybackSlots,
+		responses: make(map[snowflake.ID]responseCard), preferencesPath: path,
+		autoplay: settings.Autoplay, volume: settings.Volume, idleTimeout: options.IdleTimeout,
+		opusBitrate: options.OpusBitrate, wake: make(chan struct{}, 1)}
+}
+
+func (p *Player) Done() <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.done
 }
