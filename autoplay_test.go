@@ -16,7 +16,7 @@ func TestParseNextTrack(t *testing.T) {
 			"contentImage":{"thumbnailViewModel":{"overlays":[{"thumbnailBottomOverlayViewModel":{"badges":[{"thumbnailBadgeViewModel":{"text":"4:36"}}]}}]}}}},
 		{"compactVideoRenderer":{"videoId":"XymqZCAUS1c","title":{"simpleText":"Later result"},"lengthText":{"simpleText":"3:39"}}}
 	]}}}}}`
-	next, err := parseNextTracks(strings.NewReader(body), 42, []string{"Os4WFOsJE_I"})
+	next, err := parseNextTracks(strings.NewReader(body), 42, []track{{id: "Os4WFOsJE_I"}})
 	if err != nil || len(next) != 2 || next[0].id != "c1gtzwJydhM" || next[0].Title != "Alabang" || next[0].textChannel != 42 || next[1].id != "XymqZCAUS1c" {
 		t.Fatalf("recommendation: %+v, error: %v", next, err)
 	}
@@ -44,5 +44,24 @@ func TestAutoplayBatchLimitAndDuplicates(t *testing.T) {
 		if want := fmt.Sprintf("%011d", i+1); pick.id != want {
 			t.Errorf("pick %d: got %s, want %s", i, pick.id, want)
 		}
+	}
+}
+
+func TestAutoplayDeduplicatesSongs(t *testing.T) {
+	var entries []string
+	for i, title := range []string{
+		"The Chainsmokers - Closer (Official Music Video)",
+		"Closer (Lyrics)",
+		"Ne-Yo - Closer (Official Video)",
+		"The Chainsmokers - Closer (Live)",
+		"The Chainsmokers - Closer (Live) [Official Video]",
+	} {
+		entries = append(entries, fmt.Sprintf(`{"compactVideoRenderer":{"videoId":"%011d","title":{"simpleText":%q},"shortBylineText":{"simpleText":"Unrelated uploader"},"lengthText":{"simpleText":"3:00"}}}`, i+1, title))
+	}
+	body := `{"contents":{"twoColumnWatchNextResults":{"secondaryResults":{"secondaryResults":{"results":[` + strings.Join(entries, ",") + `]}}}}}`
+	recent := []track{{id: "abcdefghijk", media: media{Title: "Closer (Lyrics)", Artist: "The Chainsmokers - Topic"}}}
+	picks, err := parseNextTracks(strings.NewReader(body), 42, recent)
+	if err != nil || len(picks) != 3 || picks[0].id != "00000000002" || picks[1].id != "00000000003" || picks[2].id != "00000000004" {
+		t.Fatalf("recommendations: %+v, error: %v", picks, err)
 	}
 }

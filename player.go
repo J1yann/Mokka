@@ -153,7 +153,7 @@ func (p *player) run() {
 	defer stopWatch()
 	go p.watchVoice(watch)
 	var conn voice.Conn
-	var recent []string
+	var recent []track
 	var picks []track
 	var advanceAutoplay, autoplayAfterSkip bool
 	var lastTrack track
@@ -203,7 +203,7 @@ func (p *player) run() {
 		}
 		lastTrack = t
 		t.cardID = rand.Text()
-		recent = append(recent, t.id)
+		recent = append(recent, t)
 		if len(recent) > 20 {
 			recent = recent[1:]
 		}
@@ -213,6 +213,7 @@ func (p *player) run() {
 		p.mu.Unlock()
 
 		if playRecommendation {
+			slog.Info("autoplay selected", "guild", p.guild, "video", t.id, "title", t.Title)
 			go p.notify(t, card("Autoplay", "Playing "+escapeCardText(label(t.Title))+" next from recommendations.", ""))
 		}
 		var sent time.Duration
@@ -228,12 +229,15 @@ func (p *player) run() {
 			}
 		}
 		p.mu.Lock()
+		if resolved := p.current; autoplaySongKey(t) == "" && autoplaySongKey(resolved) != "" {
+			recent[len(recent)-1] = track{id: t.id, media: media{Title: resolved.Title, Artist: resolved.Artist}}
+		}
 		finished := err == nil && ctx.Err() == nil && !p.leaving
 		skipped := context.Cause(ctx) == errTrackSkipped && !p.leaving
 		noRecommendation := false
 		if (finished || skipped) && p.canAutoplay(skipped) {
 			picks = slices.DeleteFunc(picks, func(candidate track) bool {
-				return slices.Contains(recent, candidate.id)
+				return skipAutoplayDuplicate(candidate, recent)
 			})
 			if len(picks) == 0 {
 				lookupCtx, cancelLookup := context.WithCancelCause(p.ctx)
